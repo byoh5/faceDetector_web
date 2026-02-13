@@ -3,6 +3,7 @@ import { clampRect } from './geometry'
 
 const OPENCV_JS_URL = 'https://docs.opencv.org/4.10.0/opencv.js'
 const CASCADE_FILE = 'haarcascade_russian_plate_number.xml'
+const CASCADE_FILE_URL = `${import.meta.env.BASE_URL}${CASCADE_FILE}`
 
 type CvNamespace = {
   Mat: new () => {
@@ -146,7 +147,7 @@ async function ensureCascade(cv: CvNamespace): Promise<void> {
   const exists = cv.FS_analyzePath(`/${CASCADE_FILE}`).exists
 
   if (!exists) {
-    const response = await fetch(`/${CASCADE_FILE}`)
+    const response = await fetch(CASCADE_FILE_URL)
 
     if (!response.ok) {
       throw new Error('번호판 cascade 파일을 불러오지 못했습니다.')

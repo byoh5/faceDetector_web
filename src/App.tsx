@@ -18,6 +18,9 @@ import type {
 const MIN_MANUAL_BOX_SIZE = 12
 const DEFAULT_JPEG_QUALITY = 0.82
 const DEFAULT_MAX_LONG_EDGE = 1920
+const MOBILE_BATCH_DETECTION_MAX_LONG_EDGE = 1280
+const DESKTOP_BATCH_DETECTION_MAX_LONG_EDGE = 1920
+const MOBILE_BATCH_COOLDOWN_MS = 40
 const ENGINE_CACHE_KEY = 'face_masker_engine_assets_v1'
 const ENABLE_PLATE_DETECTION = false
 const FACE_WARMUP_TIMEOUT_MS = 25_000
@@ -384,6 +387,69 @@ function calculateTargetSize(
     width: Math.max(1, Math.round(width * scale)),
     height: Math.max(1, Math.round(height * scale)),
   }
+}
+
+function createBatchDetectionSource(
+  sourceCanvas: HTMLCanvasElement,
+  maxLongEdge: number,
+): { canvas: HTMLCanvasElement; scale: number } {
+  const longest = Math.max(sourceCanvas.width, sourceCanvas.height)
+
+  if (longest <= maxLongEdge || maxLongEdge <= 0) {
+    return { canvas: sourceCanvas, scale: 1 }
+  }
+
+  const scale = maxLongEdge / longest
+  const detectionCanvas = document.createElement('canvas')
+  detectionCanvas.width = Math.max(1, Math.round(sourceCanvas.width * scale))
+  detectionCanvas.height = Math.max(1, Math.round(sourceCanvas.height * scale))
+
+  const context = detectionCanvas.getContext('2d')
+
+  if (!context) {
+    return { canvas: sourceCanvas, scale: 1 }
+  }
+
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.drawImage(
+    sourceCanvas,
+    0,
+    0,
+    sourceCanvas.width,
+    sourceCanvas.height,
+    0,
+    0,
+    detectionCanvas.width,
+    detectionCanvas.height,
+  )
+
+  return { canvas: detectionCanvas, scale }
+}
+
+function rescaleDetectionRects(
+  rects: DetectionRect[],
+  scale: number,
+): DetectionRect[] {
+  if (scale >= 0.999) {
+    return rects
+  }
+
+  const inverse = 1 / scale
+
+  return rects.map((rect) => ({
+    ...rect,
+    x: rect.x * inverse,
+    y: rect.y * inverse,
+    width: rect.width * inverse,
+    height: rect.height * inverse,
+  }))
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    globalThis.setTimeout(resolve, ms)
+  })
 }
 
 function getJpegQuality(optimizeData: boolean, jpegQuality: number): number {
@@ -988,6 +1054,10 @@ function App() {
 
       let plateDetectionEnabled = ENABLE_PLATE_DETECTION && isPlateDetectorReady
       let plateDetectionErrorMessage = ''
+      const isMobileBatch = downloadGuide.isMobile
+      const batchDetectionMaxLongEdge = isMobileBatch
+        ? MOBILE_BATCH_DETECTION_MAX_LONG_EDGE
+        : DESKTOP_BATCH_DETECTION_MAX_LONG_EDGE
 
       setIsBatchProcessing(true)
       setDrawModeEnabled(false)
@@ -1001,13 +1071,14 @@ function App() {
         plateCount: 0,
       }))
 
+      const batchStartBaseMessage = plateDetectionEnabled
+        ? `${imageFiles.length}장 일괄 처리를 시작합니다.`
+        : ENABLE_PLATE_DETECTION
+          ? `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 엔진 비활성화: 얼굴 중심 모드)`
+          : `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 기능 임시 보류: 얼굴 중심 모드)`
       setBatchResults(initialResults)
       setStatusMessage(
-        plateDetectionEnabled
-          ? `${imageFiles.length}장 일괄 처리를 시작합니다.`
-          : ENABLE_PLATE_DETECTION
-            ? `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 엔진 비활성화: 얼굴 중심 모드)`
-            : `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 기능 임시 보류: 얼굴 중심 모드)`,
+        `${batchStartBaseMessage} 일괄 처리 중에는 미리보기 패널 대신 로그에서 진행 상황을 확인할 수 있습니다.`,
       )
 
       const zip = new JSZip()
@@ -1028,18 +1099,30 @@ function App() {
           )
 
           let objectUrl: string | null = null
+          let sourceCanvas: HTMLCanvasElement | null = null
+          let detectionCanvas: HTMLCanvasElement | null = null
+          let loadedImage: HTMLImageElement | null = null
 
           try {
             inputBytesTotal += file.size
 
             const loaded = await loadImageFromFile(file)
             objectUrl = loaded.objectUrl
+            loadedImage = loaded.image
 
-            const sourceCanvas = createSourceCanvas(loaded.image)
+            sourceCanvas = createSourceCanvas(loaded.image)
+            const detectionSource = createBatchDetectionSource(
+              sourceCanvas,
+              batchDetectionMaxLongEdge,
+            )
+            detectionCanvas =
+              detectionSource.canvas === sourceCanvas ? null : detectionSource.canvas
             let plateScanErrorMessage = ''
 
             const [faces, plates] = await Promise.all([
-              detectFaces(loaded.image),
+              detectFaces(detectionSource.canvas).then((detected) =>
+                rescaleDetectionRects(detected, detectionSource.scale),
+              ),
               plateDetectionEnabled
                 ? withTimeout(
                     detectLicensePlates(loaded.image),
@@ -1100,14 +1183,32 @@ function App() {
                   ? {
                       ...item,
                       status: 'failed',
-                      errorMessage: message,
+                      errorMessage: `${message}${isMobileBatch ? ' (모바일 메모리/브라우저 제한 가능성)' : ''}`,
                     }
                   : item,
               ),
             )
           } finally {
+            if (detectionCanvas) {
+              detectionCanvas.width = 0
+              detectionCanvas.height = 0
+            }
+
+            if (sourceCanvas) {
+              sourceCanvas.width = 0
+              sourceCanvas.height = 0
+            }
+
+            if (loadedImage) {
+              loadedImage.src = ''
+            }
+
             if (objectUrl) {
               URL.revokeObjectURL(objectUrl)
+            }
+
+            if (isMobileBatch) {
+              await sleep(MOBILE_BATCH_COOLDOWN_MS)
             }
           }
         }
@@ -1163,7 +1264,14 @@ function App() {
         setIsBatchProcessing(false)
       }
     },
-    [exportOptions, isPlateDetectorReady, isPrepared, isScanning, maskStyle],
+    [
+      downloadGuide.isMobile,
+      exportOptions,
+      isPlateDetectorReady,
+      isPrepared,
+      isScanning,
+      maskStyle,
+    ],
   )
 
   const getPointOnImage = useCallback(

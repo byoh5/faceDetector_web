@@ -21,6 +21,8 @@ const DEFAULT_MAX_LONG_EDGE = 1920
 const MOBILE_BATCH_DETECTION_MAX_LONG_EDGE = 1280
 const DESKTOP_BATCH_DETECTION_MAX_LONG_EDGE = 1920
 const MOBILE_BATCH_COOLDOWN_MS = 40
+const MOBILE_SINGLE_MODE_MESSAGE =
+  '모바일은 메모리 제약으로 한 번에 한 장만 변환할 수 있습니다.'
 const ENGINE_CACHE_KEY = 'face_masker_engine_assets_v1'
 const ENABLE_PLATE_DETECTION = false
 const FACE_WARMUP_TIMEOUT_MS = 25_000
@@ -627,6 +629,7 @@ function App() {
     typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 
   const downloadGuide = useMemo(() => buildDownloadGuide(), [])
+  const isMobileMode = downloadGuide.isMobile
   const isKakaoInApp = Boolean(downloadGuide.isKakaoInApp)
 
   const downloadHint = useMemo(() => {
@@ -1052,6 +1055,11 @@ function App() {
 
   const processBatchFiles = useCallback(
     async (files: File[]) => {
+      if (isMobileMode) {
+        setStatusMessage(MOBILE_SINGLE_MODE_MESSAGE)
+        return
+      }
+
       if (!isPrepared) {
         setStatusMessage('먼저 변환 준비를 완료해 주세요.')
         return
@@ -1284,6 +1292,7 @@ function App() {
     [
       downloadGuide.isMobile,
       exportOptions,
+      isMobileMode,
       isPlateDetectorReady,
       isPrepared,
       isScanning,
@@ -1431,6 +1440,12 @@ function App() {
       }
 
       if (files.length > 1) {
+        if (isMobileMode) {
+          setStatusMessage(MOBILE_SINGLE_MODE_MESSAGE)
+          event.target.value = ''
+          return
+        }
+
         await processBatchFiles(files)
         event.target.value = ''
         return
@@ -1439,7 +1454,7 @@ function App() {
       await loadFile(files[0])
       event.target.value = ''
     },
-    [loadFile, processBatchFiles],
+    [isMobileMode, loadFile, processBatchFiles],
   )
 
   const onPickBatchFiles: React.ChangeEventHandler<HTMLInputElement> =
@@ -1474,13 +1489,18 @@ function App() {
       }
 
       if (droppedFiles.length > 1) {
+        if (isMobileMode) {
+          setStatusMessage(MOBILE_SINGLE_MODE_MESSAGE)
+          return
+        }
+
         await processBatchFiles(droppedFiles)
         return
       }
 
       await loadFile(droppedFiles[0])
     },
-    [isBatchProcessing, loadFile, processBatchFiles],
+    [isBatchProcessing, isMobileMode, loadFile, processBatchFiles],
   )
 
   const downloadMaskedImage = useCallback(async () => {
@@ -1632,6 +1652,7 @@ function App() {
               <li>엔진 다운로드 후: 같은 브라우저에서 추가 다운로드 없음</li>
               <li>사진 자체는 서버 업로드 없이 기기 내에서 처리</li>
               <li>기본 출력은 JPG + 크기 최적화(품질 82%, 긴 변 1920px)</li>
+              {isMobileMode && <li>{MOBILE_SINGLE_MODE_MESSAGE}</li>}
             </ul>
 
             <div className="consent-note">{preparationMessage}</div>
@@ -1708,6 +1729,10 @@ function App() {
                   : '얼굴 엔진 준비가 끝났습니다. 번호판 엔진은 곧 백그라운드에서 준비됩니다.'}
         </section>
 
+        {isMobileMode && (
+          <section className="mobile-single-notice">{MOBILE_SINGLE_MODE_MESSAGE}</section>
+        )}
+
         <section className="controls">
           <div className="dropzone-wrapper">
             <label
@@ -1722,24 +1747,28 @@ function App() {
               <input
                 type="file"
                 accept="image/*"
-                multiple
+                multiple={!isMobileMode}
                 onChange={onPickFile}
                 className="file-input"
               />
               <span className="dropzone-title">사진 드래그 또는 클릭 업로드</span>
               <span className="dropzone-subtitle">
-                2장 이상 선택/드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다.
+                {isMobileMode
+                  ? '모바일에서는 한 번에 한 장만 선택할 수 있습니다.'
+                  : '2장 이상 선택/드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다.'}
               </span>
             </label>
 
-            <input
-              ref={batchInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={onPickBatchFiles}
-              className="file-input"
-            />
+            {!isMobileMode && (
+              <input
+                ref={batchInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={onPickBatchFiles}
+                className="file-input"
+              />
+            )}
 
             <div className="toolbar">
               <button
@@ -1769,13 +1798,15 @@ function App() {
               >
                 박스 전체 삭제
               </button>
-              <button
-                type="button"
-                disabled={isBatchProcessing}
-                onClick={() => batchInputRef.current?.click()}
-              >
-                {isBatchProcessing ? '일괄 처리 중...' : '여러 장 ZIP 일괄 처리'}
-              </button>
+              {!isMobileMode && (
+                <button
+                  type="button"
+                  disabled={isBatchProcessing}
+                  onClick={() => batchInputRef.current?.click()}
+                >
+                  {isBatchProcessing ? '일괄 처리 중...' : '여러 장 ZIP 일괄 처리'}
+                </button>
+              )}
             </div>
           </div>
 

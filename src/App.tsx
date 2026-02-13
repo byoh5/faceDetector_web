@@ -275,7 +275,7 @@ function buildDownloadGuide(): DownloadGuideInfo {
 }
 
 const PAGE_ITEMS: Array<{ key: PageKey; label: string; icon: string }> = [
-  { key: 'tool', label: '자동 가림 툴', icon: '🧩' },
+  { key: 'tool', label: '프라이버시 마스킹', icon: '🧩' },
   { key: 'about', label: '사이트 소개', icon: '📘' },
   { key: 'privacy', label: '개인정보처리방침', icon: '🛡️' },
   { key: 'contact', label: '문의하기', icon: '✉️' },
@@ -615,7 +615,7 @@ function App() {
   const [preparationMessage, setPreparationMessage] = useState(
     ENABLE_PLATE_DETECTION
       ? '기능을 시작하면 얼굴/번호판 검출 엔진을 한 번만 내려받습니다.'
-      : '기능을 시작하면 얼굴 검출 엔진을 한 번만 내려받습니다. (번호판 기능 임시 보류)',
+      : '기능을 시작하면 얼굴 검출 엔진을 한 번만 내려받습니다.',
   )
 
   const [imageMeta, setImageMeta] = useState<ImageMeta | null>(null)
@@ -638,7 +638,7 @@ function App() {
   const [statusMessage, setStatusMessage] = useState(
     ENABLE_PLATE_DETECTION
       ? '사진을 올리면 얼굴+번호판 자동 가림이 시작됩니다.'
-      : '사진을 올리면 얼굴 자동 가림이 시작됩니다. (번호판 기능 임시 보류)',
+      : '사진을 올리면 얼굴 자동 가림이 시작됩니다.',
   )
 
   const canUseShareSheet =
@@ -884,12 +884,12 @@ function App() {
       setPreparationMessage(
         ENABLE_PLATE_DETECTION
           ? '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다.'
-          : '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다. (번호판 기능 임시 보류)',
+          : '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다.',
       )
       setStatusMessage(
         ENABLE_PLATE_DETECTION
           ? '엔진 준비 완료: 얼굴 엔진은 즉시 사용 가능하며 번호판 엔진은 백그라운드에서 준비됩니다.'
-          : '엔진 준비 완료: 얼굴 엔진을 사용할 수 있습니다. (번호판 기능 임시 보류)',
+          : '엔진 준비 완료: 얼굴 엔진을 사용할 수 있습니다.',
       )
     } catch (error) {
       const message = toErrorMessage(
@@ -1029,7 +1029,7 @@ function App() {
         setStatusMessage(
           ENABLE_PLATE_DETECTION
             ? `자동 스캔 완료: 얼굴 ${faces.length}개 (번호판 엔진 비활성화)`
-            : `자동 스캔 완료: 얼굴 ${faces.length}개 (번호판 기능 임시 보류)`,
+            : `자동 스캔 완료: 얼굴 ${faces.length}개`,
         )
         return
       }
@@ -1179,7 +1179,7 @@ function App() {
         ? `${imageFiles.length}장 일괄 처리를 시작합니다.`
         : ENABLE_PLATE_DETECTION
           ? `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 엔진 비활성화: 얼굴 중심 모드)`
-          : `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 기능 임시 보류: 얼굴 중심 모드)`
+          : `${imageFiles.length}장 일괄 처리를 시작합니다.`
       setBatchResults(initialResults)
       setStatusMessage(
         `${batchStartBaseMessage} 완료 후 썸네일에서 결과를 확인하고 최종 승인 다운로드를 진행할 수 있습니다.`,
@@ -1329,7 +1329,7 @@ function App() {
           ? ''
           : ENABLE_PLATE_DETECTION
             ? ` · 번호판 엔진 비활성화(얼굴 중심 모드${plateDetectionErrorMessage ? `: ${plateDetectionErrorMessage}` : ''})`
-            : ' · 번호판 기능 임시 보류(얼굴 중심 모드)'
+            : ''
 
         if (successCount === 0) {
           setStatusMessage(`일괄 처리 실패: 생성된 이미지가 없습니다.${plateModeNote}`)
@@ -1797,10 +1797,10 @@ function App() {
           Math.round((1 - outputBytes / inputBytes) * 100),
         )
         setStatusMessage(
-          `가려진 JPG 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${exported.width}x${exported.height}`,
+          `프라이버시 이미지 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${exported.width}x${exported.height}`,
         )
       } else {
-        setStatusMessage('가려진 JPG 이미지를 다운로드했습니다.')
+        setStatusMessage('프라이버시 이미지를 다운로드했습니다.')
       }
       setIsDownloadGuideOpen(true)
     } catch {
@@ -1904,9 +1904,6 @@ function App() {
       batchReviewItems.find((item) => item.id === editingBatchResultId) ?? null
     )
   }, [batchReviewItems, editingBatchResultId])
-  const isSelectedBatchEditing =
-    Boolean(selectedBatchResult) &&
-    selectedBatchResult?.id === editingBatchResult?.id
 
   useEffect(() => {
     if (batchReviewItems.length === 0) {
@@ -1921,11 +1918,24 @@ function App() {
     }
   }, [batchReviewItems, selectedBatchResultId])
 
+  useEffect(() => {
+    if (isBatchProcessing || batchReviewItems.length === 0 || editingBatchResultId) {
+      return
+    }
+
+    void openBatchItemForManualEdit(batchReviewItems[0].id)
+  }, [
+    batchReviewItems,
+    editingBatchResultId,
+    isBatchProcessing,
+    openBatchItemForManualEdit,
+  ])
+
   const hasImage = Boolean(imageMeta)
 
   const currentPageTitle = useMemo(() => {
     if (activePage === 'tool') {
-      return '자동 가림 툴'
+      return '프라이버시 마스킹'
     }
 
     if (activePage === 'about') {
@@ -1944,12 +1954,12 @@ function App() {
       return (
         <section className="app-shell intro-shell">
           <section className="hero intro-hero">
-            <p className="eyebrow">모바일 우선 익명화 툴</p>
+            <p className="eyebrow">모바일 우선 프라이버시 마스킹</p>
             <h1>변환 전 데이터 안내</h1>
             <p className="hero-description">
               {ENABLE_PLATE_DETECTION
                 ? '기능 시작 시 얼굴/번호판 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'
-                : '기능 시작 시 얼굴 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다. 번호판 기능은 임시 보류 상태입니다.'}
+                : '기능 시작 시 얼굴 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'}
             </p>
           </section>
 
@@ -2017,17 +2027,17 @@ function App() {
       <div className="app-shell">
         <section className="hero">
           <p className="eyebrow">브라우저 로컬 처리</p>
-          <h1>업로드 전에 10초 익명화</h1>
+          <h1>잠깐! 업로드 전에 타인의 프라이버시를 존중해 주세요!</h1>
           <p className="hero-description">
             {ENABLE_PLATE_DETECTION
               ? '얼굴과 번호판을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다.'
-              : '얼굴을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다. 번호판 기능은 임시 보류 상태입니다.'}
+              : '얼굴을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다.'}
           </p>
         </section>
 
         <section className="cache-assurance">
           {!ENABLE_PLATE_DETECTION
-            ? '얼굴 엔진 준비가 끝났습니다. 번호판 기능은 임시 보류 상태이며 얼굴 중심 모드로 동작합니다.'
+            ? '얼굴 엔진 준비가 끝났습니다. 같은 브라우저에서는 추가 다운로드 없이 안심하고 변환할 수 있습니다. 기본 출력은 데이터 절약 JPG 설정이 적용됩니다.'
             : isPlateDetectorReady
               ? '엔진 준비가 끝났습니다. 같은 브라우저에서는 추가 다운로드 없이 안심하고 변환할 수 있습니다. 기본 출력은 데이터 절약 JPG 설정이 적용됩니다.'
               : isPlateDetectorWarming
@@ -2282,7 +2292,7 @@ function App() {
                 }}
                 disabled={!hasImage}
               >
-                가려진 JPG 다운로드
+                프라이버시 이미지 다운로드
               </button>
               <button
                 type="button"
@@ -2298,21 +2308,12 @@ function App() {
             {batchReviewItems.length > 0 && (
               <section className="batch-review">
                 <div className="batch-review-head">
-                  <h3>일괄 결과 검토</h3>
+                  <h3>일괄 편집</h3>
                   <p>
-                    썸네일로 결과를 확인하고, 필요한 경우 편집 캔버스로 열어 수동 박스를
-                    추가한 뒤 저장해 주세요.
+                    검토 전용 화면 없이 썸네일을 누르면 바로 편집 캔버스로 전환됩니다.
+                    수동 박스 보정 후 저장해 주세요.
                   </p>
                 </div>
-
-                {selectedBatchResult?.previewUrl && (
-                  <div className="batch-review-preview">
-                    <img
-                      src={selectedBatchResult.previewUrl}
-                      alt={`${selectedBatchResult.fileName} 처리 결과`}
-                    />
-                  </div>
-                )}
 
                 {selectedBatchResult && (
                   <p className="batch-review-meta">
@@ -2325,8 +2326,7 @@ function App() {
                     ·{' '}
                     {selectedBatchResult.approvedForDownload
                       ? '다운로드 승인됨'
-                      : '다운로드 제외됨'}{' '}
-                    · {isSelectedBatchEditing ? '편집 캔버스 연결됨' : '검토 전용'}
+                      : '다운로드 제외됨'}
                   </p>
                 )}
 
@@ -2346,20 +2346,9 @@ function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (selectedBatchResult) {
-                        void openBatchItemForManualEdit(selectedBatchResult.id)
-                      }
-                    }}
-                    disabled={!selectedBatchResult || isBatchProcessing}
-                  >
-                    선택 이미지 편집 열기
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
                       void saveBatchItemEdits()
                     }}
-                    disabled={!isSelectedBatchEditing || isBatchProcessing}
+                    disabled={!editingBatchResult || isBatchProcessing}
                   >
                     현재 보정 저장
                   </button>
@@ -2389,9 +2378,11 @@ function App() {
                       key={item.id}
                       type="button"
                       className={`batch-thumb ${
-                        selectedBatchResult?.id === item.id ? 'active' : ''
+                        editingBatchResult?.id === item.id ? 'active' : ''
                       } ${item.approvedForDownload ? 'approved' : 'rejected'}`}
-                      onClick={() => setSelectedBatchResultId(item.id)}
+                      onClick={() => {
+                        void openBatchItemForManualEdit(item.id)
+                      }}
                     >
                       {item.previewUrl && (
                         <img

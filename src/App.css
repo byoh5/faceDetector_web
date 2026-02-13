@@ -410,7 +410,9 @@
 .toolbar button,
 .action-row button,
 .segmented button,
-.region-list button {
+.region-list button,
+.batch-review-controls button,
+.batch-final-download-btn {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: color-mix(in oklab, var(--surface) 86%, transparent);
@@ -420,7 +422,9 @@
 }
 
 .toolbar button,
-.action-row button {
+.action-row button,
+.batch-review-controls button,
+.batch-final-download-btn {
   min-height: 44px;
   padding: 10px 12px;
 }
@@ -777,20 +781,6 @@ button:disabled {
   margin: 2px 0 0;
   font-size: 0.8rem;
   color: var(--ink-soft);
-}
-
-.batch-review-preview {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  overflow: hidden;
-  background: color-mix(in oklab, var(--surface) 74%, #0f172a);
-}
-
-.batch-review-preview img {
-  display: block;
-  width: 100%;
-  max-height: 320px;
-  object-fit: contain;
 }
 
 .batch-review-meta {

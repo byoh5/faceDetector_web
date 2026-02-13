@@ -34,12 +34,14 @@ const THEME_STORAGE_KEY = 'face_masker_theme_v1'
 const DEFAULT_EDITOR_QUALITY = 0.86
 const DEFAULT_EDITOR_MAX_LONG_EDGE = 1920
 const EDITOR_MIN_CROP_SIZE = 20
-const EDITOR_PDF_MARGIN_MM = 12
+const DEFAULT_EDITOR_PDF_COVERAGE = 92
+const EDITOR_PDF_MIN_MARGIN_MM = 4
 
 type ThemeMode = 'dark' | 'light'
 type PageKey = 'tool' | 'editor' | 'about' | 'privacy' | 'contact'
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
 type EditorOutputFormat = 'jpeg' | 'png' | 'webp' | 'pdf'
+type EditorPdfOrientation = 'auto' | 'portrait' | 'landscape'
 type BrowserFamily =
   | 'chrome'
   | 'edge'
@@ -390,6 +392,32 @@ function getEditorFormatLabel(format: EditorOutputFormat): string {
   return 'PDF'
 }
 
+function resolveEditorPdfOrientation(
+  orientation: EditorPdfOrientation,
+  width: number,
+  height: number,
+): 'portrait' | 'landscape' {
+  if (orientation === 'auto') {
+    return width > height ? 'landscape' : 'portrait'
+  }
+
+  return orientation
+}
+
+function getEditorPdfOrientationLabel(
+  orientation: EditorPdfOrientation | 'portrait' | 'landscape',
+): string {
+  if (orientation === 'landscape') {
+    return '가로'
+  }
+
+  if (orientation === 'portrait') {
+    return '세로'
+  }
+
+  return '자동'
+}
+
 function sanitizeCropRect(
   rect: DetectionRect,
   maxWidth: number,
@@ -733,6 +761,11 @@ function App() {
   )
   const [editorOutputFormat, setEditorOutputFormat] =
     useState<EditorOutputFormat>('jpeg')
+  const [editorPdfOrientation, setEditorPdfOrientation] =
+    useState<EditorPdfOrientation>('auto')
+  const [editorPdfCoverage, setEditorPdfCoverage] = useState(
+    DEFAULT_EDITOR_PDF_COVERAGE,
+  )
   const [editorQuality, setEditorQuality] = useState(DEFAULT_EDITOR_QUALITY)
   const [editorMaxLongEdge, setEditorMaxLongEdge] = useState(
     DEFAULT_EDITOR_MAX_LONG_EDGE,
@@ -2287,6 +2320,18 @@ function App() {
     return calculateTargetSize(cropWidth, cropHeight, editorMaxLongEdge)
   }, [editorMaxLongEdge, normalizedEditorCrop])
 
+  const resolvedEditorPdfOrientation = useMemo(() => {
+    if (!editorOutputSize) {
+      return 'portrait'
+    }
+
+    return resolveEditorPdfOrientation(
+      editorPdfOrientation,
+      editorOutputSize.width,
+      editorOutputSize.height,
+    )
+  }, [editorOutputSize, editorPdfOrientation])
+
   const downloadEditedImage = useCallback(async () => {
     const sourceCanvas = editorSourceCanvasRef.current
 
@@ -2356,18 +2401,19 @@ function App() {
 
       if (editorOutputFormat === 'pdf') {
         const { jsPDF } = await import('jspdf')
-        const orientation =
-          editorOutputSize.width > editorOutputSize.height ? 'landscape' : 'portrait'
         const pdf = new jsPDF({
-          orientation,
+          orientation: resolvedEditorPdfOrientation,
           unit: 'mm',
           format: 'a4',
           compress: true,
         })
         const pageWidthMm = pdf.internal.pageSize.getWidth()
         const pageHeightMm = pdf.internal.pageSize.getHeight()
-        const printableWidthMm = Math.max(1, pageWidthMm - EDITOR_PDF_MARGIN_MM * 2)
-        const printableHeightMm = Math.max(1, pageHeightMm - EDITOR_PDF_MARGIN_MM * 2)
+        const normalizedCoverage = Math.max(60, Math.min(100, editorPdfCoverage)) / 100
+        const safeWidthMm = Math.max(1, pageWidthMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
+        const safeHeightMm = Math.max(1, pageHeightMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
+        const printableWidthMm = Math.max(1, safeWidthMm * normalizedCoverage)
+        const printableHeightMm = Math.max(1, safeHeightMm * normalizedCoverage)
         const fitScale = Math.min(
           printableWidthMm / editorOutputSize.width,
           printableHeightMm / editorOutputSize.height,
@@ -2420,7 +2466,7 @@ function App() {
         )
         const outputSummary =
           editorOutputFormat === 'pdf'
-            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 PDF`
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${editorPdfCoverage}%)`
             : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${outputSummary}`,
@@ -2428,7 +2474,7 @@ function App() {
       } else {
         const outputSummary =
           editorOutputFormat === 'pdf'
-            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 PDF`
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${editorPdfCoverage}%)`
             : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${outputSummary}`,
@@ -2446,8 +2492,10 @@ function App() {
     }
   }, [
     editorImageMeta,
+    editorPdfCoverage,
     editorOutputFormat,
     editorOutputSize,
+    resolvedEditorPdfOrientation,
     editorQuality,
     normalizedEditorCrop,
   ])
@@ -3228,6 +3276,40 @@ function App() {
                   <option value="pdf">PDF (A4 문서형)</option>
                 </select>
 
+                {editorOutputFormat === 'pdf' ? (
+                  <>
+                    <label className="optimize-field">
+                      A4 방향
+                      <strong>{getEditorPdfOrientationLabel(editorPdfOrientation)}</strong>
+                    </label>
+                    <select
+                      value={editorPdfOrientation}
+                      onChange={(event) =>
+                        setEditorPdfOrientation(event.target.value as EditorPdfOrientation)
+                      }
+                    >
+                      <option value="auto">자동</option>
+                      <option value="portrait">세로</option>
+                      <option value="landscape">가로</option>
+                    </select>
+
+                    <label className="optimize-field">
+                      A4 채움 비율
+                      <strong>{editorPdfCoverage}%</strong>
+                    </label>
+                    <input
+                      type="range"
+                      min={60}
+                      max={100}
+                      step={1}
+                      value={editorPdfCoverage}
+                      onChange={(event) =>
+                        setEditorPdfCoverage(Number(event.target.value))
+                      }
+                    />
+                  </>
+                ) : null}
+
                 <label className="optimize-field">
                   품질
                   <strong>
@@ -3415,7 +3497,7 @@ function App() {
                   <li>
                     <span>PDF 페이지</span>
                     <strong>
-                      {`A4 (${editorOutputSize.width > editorOutputSize.height ? '가로' : '세로'})`}
+                      {`A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${editorPdfCoverage}%)`}
                     </strong>
                   </li>
                 ) : null}

@@ -575,6 +575,77 @@ button:disabled {
   background: color-mix(in oklab, var(--success) 18%, transparent);
 }
 
+.download-assist {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.download-assist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.download-assist-caption {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.download-assist-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.download-guide-toggle {
+  border: 1px solid color-mix(in oklab, var(--brand) 42%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--brand) 14%, transparent);
+  color: var(--ink-strong);
+  font: inherit;
+  min-height: 34px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.download-guide-toggle.active {
+  border-color: color-mix(in oklab, var(--brand) 58%, var(--line));
+  background: color-mix(in oklab, var(--brand) 22%, transparent);
+}
+
+.download-guide-card {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--surface) 93%, transparent);
+  padding: 9px;
+  display: grid;
+  gap: 8px;
+}
+
+.download-guide-summary,
+.download-guide-footnote {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.download-guide-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-strong);
+  font-size: 0.84rem;
+  display: grid;
+  gap: 5px;
+}
+
 .region-panel {
   border: 1px solid var(--line);
   border-radius: 12px;

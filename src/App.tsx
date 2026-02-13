@@ -28,6 +28,13 @@ const THEME_STORAGE_KEY = 'face_masker_theme_v1'
 type ThemeMode = 'dark' | 'light'
 type PageKey = 'tool' | 'about' | 'privacy' | 'contact'
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
+type BrowserFamily =
+  | 'chrome'
+  | 'edge'
+  | 'firefox'
+  | 'safari'
+  | 'samsung'
+  | 'other'
 
 interface BatchResult {
   id: string
@@ -53,6 +60,14 @@ interface ExportResult {
   height: number
 }
 
+interface DownloadGuideInfo {
+  isMobile: boolean
+  environmentLabel: string
+  summary: string
+  steps: string[]
+  footnote: string
+}
+
 function parsePageFromHash(hash: string): PageKey {
   const normalized = hash.replace(/^#/, '')
 
@@ -66,6 +81,161 @@ function parsePageFromHash(hash: string): PageKey {
   }
 
   return 'tool'
+}
+
+function detectBrowserFamily(ua: string): BrowserFamily {
+  if (ua.includes('edg/') || ua.includes('edgios/')) {
+    return 'edge'
+  }
+
+  if (ua.includes('samsungbrowser/')) {
+    return 'samsung'
+  }
+
+  if (ua.includes('firefox/') || ua.includes('fxios/')) {
+    return 'firefox'
+  }
+
+  if (ua.includes('chrome/') || ua.includes('crios/')) {
+    return 'chrome'
+  }
+
+  if (ua.includes('safari/')) {
+    return 'safari'
+  }
+
+  return 'other'
+}
+
+function buildDownloadGuide(): DownloadGuideInfo {
+  if (typeof navigator === 'undefined') {
+    return {
+      isMobile: false,
+      environmentLabel: '웹 · 브라우저 미확인',
+      summary: '다운로드된 파일은 브라우저의 다운로드 목록에서 확인할 수 있습니다.',
+      steps: [
+        '브라우저 메뉴에서 다운로드 목록을 엽니다.',
+        '가장 최근 파일 옆의 폴더 열기/표시 기능을 눌러 저장 위치로 이동합니다.',
+      ],
+      footnote:
+        '보안 정책상 웹사이트가 사용자 PC의 다운로드 폴더를 자동으로 여는 것은 제한됩니다.',
+    }
+  }
+
+  const ua = navigator.userAgent.toLowerCase()
+  const platform = (navigator.platform ?? '').toLowerCase()
+  const isIOS = /iphone|ipad|ipod/.test(ua)
+  const isAndroid = ua.includes('android')
+  const isMobile = isIOS || isAndroid
+  const isMac = platform.includes('mac')
+  const browserFamily = detectBrowserFamily(ua)
+
+  if (isMobile) {
+    if (isIOS) {
+      return {
+        isMobile: true,
+        environmentLabel: '모바일(iOS)',
+        summary:
+          'iPhone/iPad에서는 브라우저 다운로드 목록 또는 파일 앱(Downloads)에서 바로 확인할 수 있습니다.',
+        steps: [
+          '브라우저의 다운로드 메뉴(예: Safari 주소창 옆 화살표/다운로드 아이콘)를 엽니다.',
+          '방금 다운로드한 파일을 터치해 미리보기로 엽니다.',
+          '파일 앱 > 찾아보기 > Downloads 폴더에서 같은 파일을 다시 찾을 수 있습니다.',
+        ],
+        footnote:
+          '웹페이지가 파일 앱을 자동으로 여는 기능은 허용되지 않습니다. 대신 공유 버튼을 이용하면 저장 위치 선택이 더 쉽습니다.',
+      }
+    }
+
+    if (browserFamily === 'samsung') {
+      return {
+        isMobile: true,
+        environmentLabel: '모바일(Android · Samsung Internet)',
+        summary:
+          'Samsung Internet의 다운로드 목록에서 최근 파일을 연 뒤, 내 파일 앱 Download 폴더에서 위치를 확인할 수 있습니다.',
+        steps: [
+          '브라우저 메뉴(≡ 또는 ⋮) > 다운로드를 엽니다.',
+          '최근 파일을 눌러 열거나 길게 눌러 파일 위치 메뉴를 확인합니다.',
+          '내 파일/Files 앱의 Download 폴더에서도 동일 파일을 찾을 수 있습니다.',
+        ],
+        footnote:
+          '기기마다 메뉴 명칭이 조금 다를 수 있습니다. 일반적으로 Download 폴더가 기본 저장 위치입니다.',
+      }
+    }
+
+    return {
+      isMobile: true,
+      environmentLabel: '모바일(Android)',
+      summary:
+        '모바일 브라우저에서는 다운로드 목록에서 파일을 연 뒤, Files 앱 Download 폴더로 이동해 위치를 확인합니다.',
+      steps: [
+        '브라우저 메뉴(⋮) > 다운로드를 엽니다.',
+        '최근 다운로드 파일을 탭해 정상 저장 여부를 확인합니다.',
+        'Files/내 파일 앱 > Download 폴더에서 파일 위치를 확인합니다.',
+      ],
+      footnote:
+        '웹페이지가 직접 파일 앱 화면으로 이동시키는 것은 보안 제한으로 불가능합니다.',
+    }
+  }
+
+  if (browserFamily === 'safari') {
+    return {
+      isMobile: false,
+      environmentLabel: '웹(macOS Safari)',
+      summary:
+        'Safari 다운로드 목록에서 파일 오른쪽의 돋보기 아이콘을 누르면 Finder 저장 위치로 바로 이동합니다.',
+      steps: [
+        'Safari 우측 상단 다운로드 버튼 또는 Option + Command + L로 다운로드 목록을 엽니다.',
+        '최근 파일 오른쪽 돋보기 아이콘을 눌러 Finder에서 표시합니다.',
+      ],
+      footnote:
+        '웹사이트가 Finder를 자동으로 여는 기능은 제공되지 않으며, 사용자가 직접 목록에서 열어야 합니다.',
+    }
+  }
+
+  if (browserFamily === 'firefox') {
+    return {
+      isMobile: false,
+      environmentLabel: '웹(Firefox)',
+      summary:
+        'Firefox 다운로드 목록에서 폴더 아이콘을 누르면 저장 폴더로 바로 이동할 수 있습니다.',
+      steps: [
+        `${isMac ? 'Command + J' : 'Ctrl + J'}로 다운로드 목록을 엽니다.`,
+        '최근 파일 오른쪽 폴더 아이콘(폴더에서 보기)을 클릭합니다.',
+      ],
+      footnote:
+        '브라우저 보안 정책상 웹페이지가 사용자 파일 탐색기를 직접 여는 동작은 차단됩니다.',
+    }
+  }
+
+  if (browserFamily === 'edge') {
+    return {
+      isMobile: false,
+      environmentLabel: '웹(Microsoft Edge)',
+      summary:
+        'Edge 다운로드 목록에서 폴더 아이콘(폴더에서 표시)을 누르면 저장 위치를 바로 열 수 있습니다.',
+      steps: [
+        `${isMac ? 'Command + Shift + J' : 'Ctrl + J'}로 다운로드 허브를 엽니다.`,
+        '최근 파일 항목의 폴더 아이콘을 눌러 저장 폴더를 엽니다.',
+      ],
+      footnote:
+        '웹사이트가 다운로드 폴더를 자동으로 열 권한은 없어서, 목록에서 수동 확인이 필요합니다.',
+    }
+  }
+
+  return {
+    isMobile: false,
+    environmentLabel:
+      browserFamily === 'chrome' ? '웹(Chrome 계열)' : '웹(브라우저 미확인)',
+    summary:
+      'Chrome 계열 브라우저는 다운로드 목록에서 파일 옆 폴더 아이콘으로 저장 위치를 바로 열 수 있습니다.',
+    steps: [
+      `${isMac ? 'Command + Shift + J' : 'Ctrl + J'}로 다운로드 목록을 엽니다.`,
+      '최근 파일의 폴더 아이콘(폴더에서 표시/열기)을 클릭합니다.',
+    ],
+    footnote:
+      '보안 정책 때문에 웹페이지가 사용자 PC 파일 시스템 경로를 직접 열거나 노출할 수는 없습니다.',
+  }
 }
 
 const PAGE_ITEMS: Array<{ key: PageKey; label: string; icon: string }> = [
@@ -348,6 +518,7 @@ function App() {
   const [drawModeEnabled, setDrawModeEnabled] = useState(false)
   const [draftRect, setDraftRect] = useState<DetectionRect | null>(null)
   const [batchResults, setBatchResults] = useState<BatchResult[]>([])
+  const [isDownloadGuideOpen, setIsDownloadGuideOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState(
     ENABLE_PLATE_DETECTION
       ? '사진을 올리면 얼굴+번호판 자동 가림이 시작됩니다.'
@@ -356,6 +527,18 @@ function App() {
 
   const canUseShareSheet =
     typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+
+  const downloadGuide = useMemo(() => buildDownloadGuide(), [])
+
+  const downloadHint = useMemo(() => {
+    if (downloadGuide.isMobile) {
+      return canUseShareSheet
+        ? '모바일에서는 다운로드 목록 또는 공유 버튼으로 저장 위치를 빠르게 확인할 수 있습니다.'
+        : '모바일에서는 브라우저 다운로드 목록과 파일 앱(Download/Downloads 폴더)에서 파일 위치를 확인하세요.'
+    }
+
+    return '웹 브라우저 보안 정책상 저장 폴더를 자동으로 열 수 없어서, 다운로드 목록에서 파일 위치를 확인해야 합니다.'
+  }, [canUseShareSheet, downloadGuide.isMobile])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -866,6 +1049,7 @@ function App() {
           anchor.click()
 
           URL.revokeObjectURL(zipUrl)
+          setIsDownloadGuideOpen(true)
         }
 
         const plateModeNote = plateDetectionEnabled
@@ -1132,6 +1316,7 @@ function App() {
       } else {
         setStatusMessage('가려진 JPG 이미지를 다운로드했습니다.')
       }
+      setIsDownloadGuideOpen(true)
     } catch {
       setStatusMessage('JPG 다운로드 파일 생성에 실패했습니다.')
     }
@@ -1536,6 +1721,33 @@ function App() {
                 공유
               </button>
             </div>
+
+            <section className="download-assist">
+              <div className="download-assist-head">
+                <p className="download-assist-caption">{downloadGuide.environmentLabel}</p>
+                <button
+                  type="button"
+                  className={`download-guide-toggle ${isDownloadGuideOpen ? 'active' : ''}`}
+                  onClick={() => setIsDownloadGuideOpen((prev) => !prev)}
+                  aria-expanded={isDownloadGuideOpen}
+                >
+                  {isDownloadGuideOpen ? '저장 위치 안내 닫기' : '저장 위치 안내'}
+                </button>
+              </div>
+              <p className="download-assist-note">{downloadHint}</p>
+
+              {isDownloadGuideOpen && (
+                <div className="download-guide-card">
+                  <p className="download-guide-summary">{downloadGuide.summary}</p>
+                  <ol className="download-guide-list">
+                    {downloadGuide.steps.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                  <p className="download-guide-footnote">{downloadGuide.footnote}</p>
+                </div>
+              )}
+            </section>
           </div>
 
           <aside className="region-panel">

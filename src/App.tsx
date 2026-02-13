@@ -19,6 +19,9 @@ const MIN_MANUAL_BOX_SIZE = 12
 const DEFAULT_JPEG_QUALITY = 0.82
 const DEFAULT_MAX_LONG_EDGE = 1920
 const ENGINE_CACHE_KEY = 'face_masker_engine_assets_v1'
+const FACE_WARMUP_TIMEOUT_MS = 25_000
+const PLATE_WARMUP_TIMEOUT_MS = 35_000
+const PLATE_DETECTION_TIMEOUT_MS = 20_000
 
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
 
@@ -44,6 +47,32 @@ interface ExportResult {
   blob: Blob
   width: number
   height: number
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = globalThis.setTimeout(() => {
+      reject(new Error(timeoutMessage))
+    }, timeoutMs)
+
+    promise
+      .then((result) => {
+        globalThis.clearTimeout(timeoutId)
+        resolve(result)
+      })
+      .catch((error) => {
+        globalThis.clearTimeout(timeoutId)
+        reject(error)
+      })
+  })
+}
+
+function toErrorMessage(error: unknown, fallbackMessage: string): string {
+  return error instanceof Error ? error.message : fallbackMessage
 }
 
 function isImageFile(file: File): boolean {
@@ -248,6 +277,7 @@ function App() {
   const [isPrepared, setIsPrepared] = useState(false)
   const [isPreparing, setIsPreparing] = useState(false)
   const [hasCachedEngines, setHasCachedEngines] = useState(false)
+  const [isPlateDetectorReady, setIsPlateDetectorReady] = useState(true)
   const [preparationMessage, setPreparationMessage] = useState(
     '기능을 시작하면 얼굴/번호판 검출 엔진을 한 번만 내려받습니다.',
   )
@@ -344,28 +374,64 @@ function App() {
     }
 
     setIsPreparing(true)
-    setPreparationMessage('엔진 파일을 내려받는 중입니다. 잠시만 기다려 주세요...')
+    setPreparationMessage('얼굴 엔진을 준비 중입니다. 잠시만 기다려 주세요...')
 
     try {
-      await Promise.all([warmupFaceDetector(), warmupPlateDetector()])
+      await withTimeout(
+        warmupFaceDetector(),
+        FACE_WARMUP_TIMEOUT_MS,
+        '얼굴 엔진 준비 시간이 초과되었습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.',
+      )
+
+      setPreparationMessage(
+        '번호판 엔진을 준비 중입니다. 기기 성능에 따라 시간이 조금 걸릴 수 있습니다...',
+      )
+
+      let plateReady = true
+      let plateErrorMessage = ''
+
+      try {
+        await withTimeout(
+          warmupPlateDetector(),
+          PLATE_WARMUP_TIMEOUT_MS,
+          '번호판 엔진 준비 시간이 초과되었습니다.',
+        )
+      } catch (error) {
+        plateReady = false
+        plateErrorMessage = toErrorMessage(
+          error,
+          '번호판 엔진 준비 중 오류가 발생했습니다.',
+        )
+      }
 
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(ENGINE_CACHE_KEY, '1')
       }
 
       setHasCachedEngines(true)
+      setIsPlateDetectorReady(plateReady)
       setIsPrepared(true)
-      setPreparationMessage(
-        '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다.',
-      )
-      setStatusMessage(
-        '엔진 준비 완료: 이제 사진 변환 중에는 추가 데이터 다운로드가 발생하지 않습니다.',
-      )
+
+      if (plateReady) {
+        setPreparationMessage(
+          '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다.',
+        )
+        setStatusMessage(
+          '엔진 준비 완료: 이제 사진 변환 중에는 추가 데이터 다운로드가 발생하지 않습니다.',
+        )
+      } else {
+        setPreparationMessage(
+          `얼굴 엔진 준비 완료. 번호판 엔진이 응답하지 않아 얼굴 중심 모드로 시작합니다. (${plateErrorMessage})`,
+        )
+        setStatusMessage(
+          '엔진 준비 완료: 번호판 엔진 오류로 얼굴 중심 모드로 동작합니다.',
+        )
+      }
     } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : '엔진 다운로드 중 오류가 발생했습니다.'
+      const message = toErrorMessage(
+        error,
+        '엔진 다운로드 중 오류가 발생했습니다.',
+      )
       setPreparationMessage(`준비 실패: ${message}`)
     } finally {
       setIsPreparing(false)
@@ -385,12 +451,30 @@ function App() {
     }
 
     setIsScanning(true)
-    setStatusMessage('자동 스캔 중... 얼굴과 번호판을 찾고 있습니다.')
+    setStatusMessage(
+      isPlateDetectorReady
+        ? '자동 스캔 중... 얼굴과 번호판을 찾고 있습니다.'
+        : '자동 스캔 중... 얼굴을 찾고 있습니다.',
+    )
 
     try {
+      let plateErrorMessage = ''
+
       const [faces, plates] = await Promise.all([
         detectFaces(image),
-        detectLicensePlates(image),
+        isPlateDetectorReady
+          ? withTimeout(
+              detectLicensePlates(image),
+              PLATE_DETECTION_TIMEOUT_MS,
+              '번호판 검출 시간이 초과되었습니다.',
+            ).catch((error) => {
+              plateErrorMessage = toErrorMessage(
+                error,
+                '번호판 검출 중 오류가 발생했습니다.',
+              )
+              return []
+            })
+          : Promise.resolve<DetectionRect[]>([]),
       ])
 
       const detectedRegions = [
@@ -400,18 +484,31 @@ function App() {
 
       setRegions(detectedRegions)
       setPreviewMode('masked')
-      setStatusMessage(
-        `자동 스캔 완료: 얼굴 ${faces.length}개, 번호판 ${plates.length}개`,
-      )
+
+      if (plateErrorMessage) {
+        setIsPlateDetectorReady(false)
+        setStatusMessage(
+          `자동 스캔 완료: 얼굴 ${faces.length}개, 번호판 엔진 오류로 얼굴만 처리했습니다. (${plateErrorMessage})`,
+        )
+        return
+      }
+
+      if (!isPlateDetectorReady) {
+        setStatusMessage(
+          `자동 스캔 완료: 얼굴 ${faces.length}개 (번호판 엔진 비활성화)`,
+        )
+        return
+      }
+
+      setStatusMessage(`자동 스캔 완료: 얼굴 ${faces.length}개, 번호판 ${plates.length}개`)
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : '자동 스캔 중 오류가 발생했습니다.'
+      const message = toErrorMessage(error, '자동 스캔 중 오류가 발생했습니다.')
       setStatusMessage(`자동 스캔 실패: ${message} 수동 박스로 보정해 주세요.`)
       setRegions([])
     } finally {
       setIsScanning(false)
     }
-  }, [createRegion, isPrepared])
+  }, [createRegion, isPlateDetectorReady, isPrepared])
 
   const loadFile = useCallback(
     async (file: File) => {
@@ -484,6 +581,9 @@ function App() {
         return
       }
 
+      let plateDetectionEnabled = isPlateDetectorReady
+      let plateDetectionErrorMessage = ''
+
       setIsBatchProcessing(true)
       setDrawModeEnabled(false)
       setDraftRect(null)
@@ -497,7 +597,11 @@ function App() {
       }))
 
       setBatchResults(initialResults)
-      setStatusMessage(`${imageFiles.length}장 일괄 처리를 시작합니다.`)
+      setStatusMessage(
+        plateDetectionEnabled
+          ? `${imageFiles.length}장 일괄 처리를 시작합니다.`
+          : `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 엔진 비활성화: 얼굴 중심 모드)`,
+      )
 
       const zip = new JSZip()
       let successCount = 0
@@ -525,10 +629,29 @@ function App() {
             objectUrl = loaded.objectUrl
 
             const sourceCanvas = createSourceCanvas(loaded.image)
+            let plateScanErrorMessage = ''
+
             const [faces, plates] = await Promise.all([
               detectFaces(loaded.image),
-              detectLicensePlates(loaded.image),
+              plateDetectionEnabled
+                ? withTimeout(
+                    detectLicensePlates(loaded.image),
+                    PLATE_DETECTION_TIMEOUT_MS,
+                    '번호판 검출 시간이 초과되었습니다.',
+                  ).catch((error) => {
+                    plateScanErrorMessage = toErrorMessage(
+                      error,
+                      '번호판 검출 중 오류가 발생했습니다.',
+                    )
+                    return []
+                  })
+                : Promise.resolve<DetectionRect[]>([]),
             ])
+
+            if (plateScanErrorMessage && plateDetectionEnabled) {
+              plateDetectionEnabled = false
+              plateDetectionErrorMessage = plateScanErrorMessage
+            }
 
             const exported = await createMaskedJpegExport(
               sourceCanvas,
@@ -559,8 +682,10 @@ function App() {
             )
           } catch (error) {
             failureCount += 1
-            const message =
-              error instanceof Error ? error.message : '이미지 처리 중 오류가 발생했습니다.'
+            const message = toErrorMessage(
+              error,
+              '이미지 처리 중 오류가 발생했습니다.',
+            )
 
             setBatchResults((prev) =>
               prev.map((item) =>
@@ -594,15 +719,19 @@ function App() {
           URL.revokeObjectURL(zipUrl)
         }
 
+        const plateModeNote = plateDetectionEnabled
+          ? ''
+          : ` · 번호판 엔진 비활성화(얼굴 중심 모드${plateDetectionErrorMessage ? `: ${plateDetectionErrorMessage}` : ''})`
+
         if (successCount === 0) {
-          setStatusMessage('일괄 처리 실패: 생성된 이미지가 없습니다.')
+          setStatusMessage(`일괄 처리 실패: 생성된 이미지가 없습니다.${plateModeNote}`)
         } else if (failureCount > 0) {
           const reductionText =
             outputBytesTotal > 0 && inputBytesTotal > 0
               ? ` · 총 ${formatBytes(inputBytesTotal)} → ${formatBytes(outputBytesTotal)}`
               : ''
           setStatusMessage(
-            `일괄 처리 완료: 성공 ${successCount}장 / 실패 ${failureCount}장${reductionText} (ZIP 다운로드 완료)`,
+            `일괄 처리 완료: 성공 ${successCount}장 / 실패 ${failureCount}장${reductionText}${plateModeNote} (ZIP 다운로드 완료)`,
           )
         } else {
           const reductionText =
@@ -610,18 +739,20 @@ function App() {
               ? ` (${formatBytes(inputBytesTotal)} → ${formatBytes(outputBytesTotal)})`
               : ''
           setStatusMessage(
-            `일괄 처리 완료: ${successCount}장 ZIP 다운로드 완료${reductionText}`,
+            `일괄 처리 완료: ${successCount}장 ZIP 다운로드 완료${reductionText}${plateModeNote}`,
           )
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : '일괄 처리 중 오류가 발생했습니다.'
+        const message = toErrorMessage(error, '일괄 처리 중 오류가 발생했습니다.')
         setStatusMessage(`일괄 처리 실패: ${message}`)
       } finally {
+        if (isPlateDetectorReady && !plateDetectionEnabled) {
+          setIsPlateDetectorReady(false)
+        }
         setIsBatchProcessing(false)
       }
     },
-    [exportOptions, isPrepared, isScanning, maskStyle],
+    [exportOptions, isPlateDetectorReady, isPrepared, isScanning, maskStyle],
   )
 
   const getPointOnImage = useCallback(
@@ -977,8 +1108,9 @@ function App() {
       </section>
 
       <section className="cache-assurance">
-        엔진 준비가 끝났습니다. 같은 브라우저에서는 추가 다운로드 없이 안심하고 변환할
-        수 있습니다. 기본 출력은 데이터 절약 JPG 설정이 적용됩니다.
+        {isPlateDetectorReady
+          ? '엔진 준비가 끝났습니다. 같은 브라우저에서는 추가 다운로드 없이 안심하고 변환할 수 있습니다. 기본 출력은 데이터 절약 JPG 설정이 적용됩니다.'
+          : '얼굴 엔진 준비가 끝났습니다. 번호판 엔진은 현재 응답하지 않아 얼굴 중심 모드로 동작합니다.'}
       </section>
 
       <section className="controls">

@@ -4,6 +4,7 @@ import { clampRect } from './geometry'
 const OPENCV_JS_URL = 'https://docs.opencv.org/4.10.0/opencv.js'
 const CASCADE_FILE = 'haarcascade_russian_plate_number.xml'
 const CASCADE_FILE_URL = `${import.meta.env.BASE_URL}${CASCADE_FILE}`
+const OPEN_CV_RUNTIME_TIMEOUT_MS = 30_000
 
 type CvNamespace = {
   Mat: new () => {
@@ -56,6 +57,30 @@ let cvPromise: Promise<CvNamespace> | null = null
 let openCvScriptPromise: Promise<void> | null = null
 let cascadeLoaded = false
 
+function waitForCvRuntime(cv: CvNamespace): Promise<CvNamespace> {
+  if (cv.Mat) {
+    return Promise.resolve(cv)
+  }
+
+  return new Promise<CvNamespace>((resolve, reject) => {
+    const previousRuntimeHandler = cv.onRuntimeInitialized
+    const timeoutId = globalThis.setTimeout(() => {
+      cv.onRuntimeInitialized = previousRuntimeHandler
+      reject(
+        new Error(
+          'OpenCV 런타임 초기화가 지연되고 있습니다. 네트워크 상태를 확인한 뒤 다시 시도해 주세요.',
+        ),
+      )
+    }, OPEN_CV_RUNTIME_TIMEOUT_MS)
+
+    cv.onRuntimeInitialized = () => {
+      globalThis.clearTimeout(timeoutId)
+      previousRuntimeHandler?.()
+      resolve(cv)
+    }
+  })
+}
+
 async function ensureOpenCvScript(): Promise<void> {
   if (openCvScriptPromise) {
     return openCvScriptPromise
@@ -85,8 +110,10 @@ async function ensureOpenCvScript(): Promise<void> {
 
       waitForCvObject()
     })
-
-    return openCvScriptPromise
+    return openCvScriptPromise.catch((error) => {
+      openCvScriptPromise = null
+      throw error
+    })
   }
 
   openCvScriptPromise = new Promise<void>((resolve, reject) => {
@@ -99,8 +126,10 @@ async function ensureOpenCvScript(): Promise<void> {
     script.onerror = () => reject(new Error('OpenCV 스크립트를 불러오지 못했습니다.'))
     document.body.appendChild(script)
   })
-
-  return openCvScriptPromise
+  return openCvScriptPromise.catch((error) => {
+    openCvScriptPromise = null
+    throw error
+  })
 }
 
 async function ensureCv(): Promise<CvNamespace> {
@@ -117,16 +146,7 @@ async function ensureCv(): Promise<CvNamespace> {
         return
       }
 
-      if (cv.Mat) {
-        resolve(cv)
-        return
-      }
-
-      const previousRuntimeHandler = cv.onRuntimeInitialized
-      cv.onRuntimeInitialized = () => {
-        previousRuntimeHandler?.()
-        resolve(cv)
-      }
+      waitForCvRuntime(cv).then(resolve).catch(reject)
     }
 
     ensureOpenCvScript()
@@ -134,6 +154,11 @@ async function ensureCv(): Promise<CvNamespace> {
       .catch((error) => {
         reject(error)
       })
+  })
+
+  cvPromise = cvPromise.catch((error) => {
+    cvPromise = null
+    throw error
   })
 
   return cvPromise

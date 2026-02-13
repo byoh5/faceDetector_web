@@ -19,6 +19,7 @@ const MIN_MANUAL_BOX_SIZE = 12
 const DEFAULT_JPEG_QUALITY = 0.82
 const DEFAULT_MAX_LONG_EDGE = 1920
 const ENGINE_CACHE_KEY = 'face_masker_engine_assets_v1'
+const ENABLE_PLATE_DETECTION = false
 const FACE_WARMUP_TIMEOUT_MS = 25_000
 const PLATE_WARMUP_TIMEOUT_MS = 35_000
 const PLATE_DETECTION_TIMEOUT_MS = 20_000
@@ -281,7 +282,9 @@ function App() {
   const [isPlateDetectorWarming, setIsPlateDetectorWarming] = useState(false)
   const [isPlateDetectorFailed, setIsPlateDetectorFailed] = useState(false)
   const [preparationMessage, setPreparationMessage] = useState(
-    '기능을 시작하면 얼굴/번호판 검출 엔진을 한 번만 내려받습니다.',
+    ENABLE_PLATE_DETECTION
+      ? '기능을 시작하면 얼굴/번호판 검출 엔진을 한 번만 내려받습니다.'
+      : '기능을 시작하면 얼굴 검출 엔진을 한 번만 내려받습니다. (번호판 기능 임시 보류)',
   )
 
   const [imageMeta, setImageMeta] = useState<ImageMeta | null>(null)
@@ -298,7 +301,9 @@ function App() {
   const [draftRect, setDraftRect] = useState<DetectionRect | null>(null)
   const [batchResults, setBatchResults] = useState<BatchResult[]>([])
   const [statusMessage, setStatusMessage] = useState(
-    '사진을 올리면 얼굴+번호판 자동 가림이 시작됩니다.',
+    ENABLE_PLATE_DETECTION
+      ? '사진을 올리면 얼굴+번호판 자동 가림이 시작됩니다.'
+      : '사진을 올리면 얼굴 자동 가림이 시작됩니다. (번호판 기능 임시 보류)',
   )
 
   const canUseShareSheet =
@@ -394,10 +399,14 @@ function App() {
       setIsPlateDetectorFailed(false)
       setIsPrepared(true)
       setPreparationMessage(
-        '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다.',
+        ENABLE_PLATE_DETECTION
+          ? '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다.'
+          : '준비 완료. 같은 브라우저에서는 추가 다운로드 없이 바로 변환할 수 있습니다. (번호판 기능 임시 보류)',
       )
       setStatusMessage(
-        '엔진 준비 완료: 얼굴 엔진은 즉시 사용 가능하며 번호판 엔진은 백그라운드에서 준비됩니다.',
+        ENABLE_PLATE_DETECTION
+          ? '엔진 준비 완료: 얼굴 엔진은 즉시 사용 가능하며 번호판 엔진은 백그라운드에서 준비됩니다.'
+          : '엔진 준비 완료: 얼굴 엔진을 사용할 수 있습니다. (번호판 기능 임시 보류)',
       )
     } catch (error) {
       const message = toErrorMessage(
@@ -411,6 +420,10 @@ function App() {
   }, [isPreparing])
 
   useEffect(() => {
+    if (!ENABLE_PLATE_DETECTION) {
+      return
+    }
+
     if (
       !isPrepared ||
       isPlateDetectorReady ||
@@ -481,11 +494,13 @@ function App() {
       return
     }
 
+    const canUsePlateDetector = ENABLE_PLATE_DETECTION && isPlateDetectorReady
+
     setIsScanning(true)
     setStatusMessage(
-      isPlateDetectorReady
+      canUsePlateDetector
         ? '자동 스캔 중... 얼굴과 번호판을 찾고 있습니다.'
-        : isPlateDetectorWarming
+        : ENABLE_PLATE_DETECTION && isPlateDetectorWarming
           ? '자동 스캔 중... 얼굴을 찾고 있습니다. (번호판 엔진 준비 중)'
           : '자동 스캔 중... 얼굴을 찾고 있습니다.',
     )
@@ -495,7 +510,7 @@ function App() {
 
       const [faces, plates] = await Promise.all([
         detectFaces(image),
-        isPlateDetectorReady
+        canUsePlateDetector
           ? withTimeout(
               detectLicensePlates(image),
               PLATE_DETECTION_TIMEOUT_MS,
@@ -518,7 +533,7 @@ function App() {
       setRegions(detectedRegions)
       setPreviewMode('masked')
 
-      if (plateErrorMessage) {
+      if (canUsePlateDetector && plateErrorMessage) {
         setIsPlateDetectorReady(false)
         setIsPlateDetectorFailed(true)
         setStatusMessage(
@@ -527,9 +542,11 @@ function App() {
         return
       }
 
-      if (!isPlateDetectorReady) {
+      if (!canUsePlateDetector) {
         setStatusMessage(
-          `자동 스캔 완료: 얼굴 ${faces.length}개 (번호판 엔진 비활성화)`,
+          ENABLE_PLATE_DETECTION
+            ? `자동 스캔 완료: 얼굴 ${faces.length}개 (번호판 엔진 비활성화)`
+            : `자동 스캔 완료: 얼굴 ${faces.length}개 (번호판 기능 임시 보류)`,
         )
         return
       }
@@ -620,7 +637,7 @@ function App() {
         return
       }
 
-      let plateDetectionEnabled = isPlateDetectorReady
+      let plateDetectionEnabled = ENABLE_PLATE_DETECTION && isPlateDetectorReady
       let plateDetectionErrorMessage = ''
 
       setIsBatchProcessing(true)
@@ -639,7 +656,9 @@ function App() {
       setStatusMessage(
         plateDetectionEnabled
           ? `${imageFiles.length}장 일괄 처리를 시작합니다.`
-          : `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 엔진 비활성화: 얼굴 중심 모드)`,
+          : ENABLE_PLATE_DETECTION
+            ? `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 엔진 비활성화: 얼굴 중심 모드)`
+            : `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 기능 임시 보류: 얼굴 중심 모드)`,
       )
 
       const zip = new JSZip()
@@ -760,7 +779,9 @@ function App() {
 
         const plateModeNote = plateDetectionEnabled
           ? ''
-          : ` · 번호판 엔진 비활성화(얼굴 중심 모드${plateDetectionErrorMessage ? `: ${plateDetectionErrorMessage}` : ''})`
+          : ENABLE_PLATE_DETECTION
+            ? ` · 번호판 엔진 비활성화(얼굴 중심 모드${plateDetectionErrorMessage ? `: ${plateDetectionErrorMessage}` : ''})`
+            : ' · 번호판 기능 임시 보류(얼굴 중심 모드)'
 
         if (successCount === 0) {
           setStatusMessage(`일괄 처리 실패: 생성된 이미지가 없습니다.${plateModeNote}`)
@@ -785,7 +806,7 @@ function App() {
         const message = toErrorMessage(error, '일괄 처리 중 오류가 발생했습니다.')
         setStatusMessage(`일괄 처리 실패: ${message}`)
       } finally {
-        if (isPlateDetectorReady && !plateDetectionEnabled) {
+        if (ENABLE_PLATE_DETECTION && isPlateDetectorReady && !plateDetectionEnabled) {
           setIsPlateDetectorReady(false)
           setIsPlateDetectorFailed(true)
         }
@@ -1099,8 +1120,9 @@ function App() {
           <p className="eyebrow">모바일 우선 익명화 툴</p>
           <h1>변환 전 데이터 안내</h1>
           <p className="hero-description">
-            기능 시작 시 얼굴/번호판 검출 엔진을 내려받습니다. 한 번 준비하면 같은
-            브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.
+            {ENABLE_PLATE_DETECTION
+              ? '기능 시작 시 얼굴/번호판 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'
+              : '기능 시작 시 얼굴 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다. 번호판 기능은 임시 보류 상태입니다.'}
           </p>
         </section>
 
@@ -1142,13 +1164,16 @@ function App() {
         <p className="eyebrow">브라우저 로컬 처리</p>
         <h1>업로드 전에 10초 익명화</h1>
         <p className="hero-description">
-          얼굴과 번호판을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만
-          빠르게 on/off 하거나 드래그로 추가하면 끝납니다.
+          {ENABLE_PLATE_DETECTION
+            ? '얼굴과 번호판을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다.'
+            : '얼굴을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다. 번호판 기능은 임시 보류 상태입니다.'}
         </p>
       </section>
 
       <section className="cache-assurance">
-        {isPlateDetectorReady
+        {!ENABLE_PLATE_DETECTION
+          ? '얼굴 엔진 준비가 끝났습니다. 번호판 기능은 임시 보류 상태이며 얼굴 중심 모드로 동작합니다.'
+          : isPlateDetectorReady
           ? '엔진 준비가 끝났습니다. 같은 브라우저에서는 추가 다운로드 없이 안심하고 변환할 수 있습니다. 기본 출력은 데이터 절약 JPG 설정이 적용됩니다.'
           : isPlateDetectorWarming
             ? '얼굴 엔진 준비가 끝났습니다. 번호판 엔진은 백그라운드에서 준비 중이며 준비 전에는 얼굴 중심 모드로 동작합니다.'
@@ -1432,7 +1457,9 @@ function App() {
                       {item.status === 'pending' && '대기 중'}
                       {item.status === 'processing' && '처리 중...'}
                       {item.status === 'done' &&
-                        `얼굴 ${item.faceCount} / 번호판 ${item.plateCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`}
+                        (ENABLE_PLATE_DETECTION
+                          ? `얼굴 ${item.faceCount} / 번호판 ${item.plateCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`
+                          : `얼굴 ${item.faceCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`)}
                       {item.status === 'failed' &&
                         `실패: ${item.errorMessage ?? '알 수 없는 오류'}`}
                     </div>

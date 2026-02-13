@@ -66,6 +66,7 @@ interface DownloadGuideInfo {
   summary: string
   steps: string[]
   footnote: string
+  isKakaoInApp?: boolean
 }
 
 function parsePageFromHash(hash: string): PageKey {
@@ -129,6 +130,28 @@ function buildDownloadGuide(): DownloadGuideInfo {
   const isMobile = isIOS || isAndroid
   const isMac = platform.includes('mac')
   const browserFamily = detectBrowserFamily(ua)
+  const isKakaoInApp = ua.includes('kakaotalk')
+
+  if (isKakaoInApp) {
+    return {
+      isMobile,
+      environmentLabel: isIOS
+        ? '카카오톡 인앱 브라우저(iOS)'
+        : '카카오톡 인앱 브라우저(Android)',
+      summary:
+        '카카오톡 내부 브라우저에서는 다운로드가 실패하거나 저장 위치 확인이 불안정할 수 있습니다.',
+      steps: [
+        '카카오톡 화면 우측 상단 메뉴(⋮ 또는 공유 버튼)를 엽니다.',
+        isIOS
+          ? '외부 브라우저로 열기 후 Chrome/Edge(또는 Safari)에서 다시 저장합니다.'
+          : '외부 브라우저로 열기 후 Chrome 또는 Edge에서 다시 저장합니다.',
+        '외부 브라우저의 다운로드 목록에서 파일을 확인합니다.',
+      ],
+      footnote:
+        '보안 정책과 인앱 브라우저 제한으로 인해 웹페이지에서 이 문제를 직접 우회하는 것은 어렵습니다.',
+      isKakaoInApp: true,
+    }
+  }
 
   if (isMobile) {
     if (isIOS) {
@@ -531,6 +554,10 @@ function App() {
   const downloadGuide = useMemo(() => buildDownloadGuide(), [])
 
   const downloadHint = useMemo(() => {
+    if (downloadGuide.isKakaoInApp) {
+      return '카카오톡 내부 브라우저에서는 저장이 불안정할 수 있어 외부 브라우저(Chrome/Edge)에서 여는 것을 권장합니다.'
+    }
+
     if (downloadGuide.isMobile) {
       return canUseShareSheet
         ? '모바일에서는 다운로드 목록 또는 공유 버튼으로 저장 위치를 빠르게 확인할 수 있습니다.'
@@ -538,7 +565,39 @@ function App() {
     }
 
     return '웹 브라우저 보안 정책상 저장 폴더를 자동으로 열 수 없어서, 다운로드 목록에서 파일 위치를 확인해야 합니다.'
-  }, [canUseShareSheet, downloadGuide.isMobile])
+  }, [canUseShareSheet, downloadGuide.isKakaoInApp, downloadGuide.isMobile])
+
+  const copyCurrentUrl = useCallback(async () => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return
+    }
+
+    const currentUrl = window.location.href
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(currentUrl)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = currentUrl
+        textarea.setAttribute('readonly', 'true')
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+
+      setStatusMessage(
+        '현재 페이지 링크를 복사했습니다. 카카오톡 메뉴에서 외부 브라우저(Chrome/Edge)로 열어 주세요.',
+      )
+    } catch {
+      setStatusMessage(
+        '링크 복사에 실패했습니다. 카카오톡 메뉴에서 직접 외부 브라우저로 열어 주세요.',
+      )
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1746,6 +1805,29 @@ function App() {
             </div>
 
             <section className="download-assist">
+              {downloadGuide.isKakaoInApp && (
+                <div className="inapp-warning-card">
+                  <p className="inapp-warning-title">카카오톡 내부 브라우저 감지됨</p>
+                  <p className="inapp-warning-description">
+                    이 환경에서는 파일 저장이 실패할 수 있습니다. 외부 브라우저에서 열어 주세요.
+                  </p>
+                  <ol className="inapp-warning-list">
+                    <li>카카오톡 상단 메뉴(⋮ 또는 공유)에서 외부 브라우저로 열기를 선택</li>
+                    <li>Chrome 또는 Edge에서 페이지를 다시 연 뒤 다운로드 진행</li>
+                    <li>브라우저 다운로드 목록에서 저장된 파일 확인</li>
+                  </ol>
+                  <button
+                    type="button"
+                    className="inapp-copy-btn"
+                    onClick={() => {
+                      void copyCurrentUrl()
+                    }}
+                  >
+                    현재 링크 복사
+                  </button>
+                </div>
+              )}
+
               <div className="download-assist-head">
                 <p className="download-assist-caption">{downloadGuide.environmentLabel}</p>
                 <button

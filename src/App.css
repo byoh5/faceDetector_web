@@ -584,6 +584,49 @@ button:disabled {
   gap: 8px;
 }
 
+.inapp-warning-card {
+  border: 1px solid color-mix(in oklab, var(--warning) 56%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--warning) 10%, var(--surface));
+  padding: 9px;
+  display: grid;
+  gap: 7px;
+}
+
+.inapp-warning-title {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: color-mix(in oklab, var(--warning) 76%, var(--ink-strong));
+}
+
+.inapp-warning-description {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.inapp-warning-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-strong);
+  font-size: 0.82rem;
+  display: grid;
+  gap: 4px;
+}
+
+.inapp-copy-btn {
+  border: 1px solid color-mix(in oklab, var(--warning) 46%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--warning) 20%, transparent);
+  color: var(--ink-strong);
+  font: inherit;
+  min-height: 34px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
 .download-assist-head {
   display: flex;
   align-items: center;

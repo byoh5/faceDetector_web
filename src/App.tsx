@@ -618,6 +618,7 @@ function App() {
     typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 
   const downloadGuide = useMemo(() => buildDownloadGuide(), [])
+  const isKakaoInApp = Boolean(downloadGuide.isKakaoInApp)
 
   const downloadHint = useMemo(() => {
     if (downloadGuide.isKakaoInApp) {
@@ -795,6 +796,13 @@ function App() {
       return
     }
 
+    if (isKakaoInApp) {
+      setPreparationMessage(
+        '카카오톡 내부 브라우저에서는 변환 시작을 막아두었습니다. 외부 브라우저(Chrome/Edge)에서 열어 주세요.',
+      )
+      return
+    }
+
     setIsPreparing(true)
     setPreparationMessage('얼굴 엔진을 준비 중입니다. 잠시만 기다려 주세요...')
 
@@ -832,7 +840,7 @@ function App() {
     } finally {
       setIsPreparing(false)
     }
-  }, [isPreparing])
+  }, [isKakaoInApp, isPreparing])
 
   useEffect(() => {
     if (!ENABLE_PLATE_DETECTION) {
@@ -1625,15 +1633,42 @@ function App() {
               </p>
             )}
 
+            {isKakaoInApp && (
+              <div className="preflight-inapp-card">
+                <p className="preflight-inapp-title">카카오톡 내부 브라우저 감지됨</p>
+                <p className="preflight-inapp-description">
+                  변환을 시작하기 전에 외부 브라우저(Chrome/Edge)에서 이 페이지를 열어 주세요.
+                </p>
+                <ol className="preflight-inapp-list">
+                  <li>카카오톡 상단 메뉴(⋮ 또는 공유)에서 외부 브라우저로 열기 선택</li>
+                  <li>Chrome 또는 Edge에서 페이지를 다시 열기</li>
+                  <li>외부 브라우저에서 변환 시작</li>
+                </ol>
+                <button
+                  type="button"
+                  className="inapp-copy-btn"
+                  onClick={() => {
+                    void copyCurrentUrl()
+                  }}
+                >
+                  현재 링크 복사
+                </button>
+              </div>
+            )}
+
             <button
               type="button"
               className="primary-btn"
               onClick={() => {
                 void prepareTransformer()
               }}
-              disabled={isPreparing}
+              disabled={isPreparing || isKakaoInApp}
             >
-              {isPreparing ? '엔진 준비 중...' : '변환하러가기'}
+              {isKakaoInApp
+                ? '외부 브라우저에서 열어 주세요'
+                : isPreparing
+                  ? '엔진 준비 중...'
+                  : '변환하러가기'}
             </button>
           </section>
         </section>

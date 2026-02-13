@@ -759,6 +759,109 @@ button:disabled {
   background: color-mix(in oklab, var(--surface) 90%, transparent);
 }
 
+.batch-review {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px;
+  display: grid;
+  gap: 8px;
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+}
+
+.batch-review-head h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.batch-review-head p {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.batch-review-preview {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--surface) 74%, #0f172a);
+}
+
+.batch-review-preview img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+}
+
+.batch-review-meta {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.batch-review-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+}
+
+.batch-thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(106px, 1fr));
+  gap: 7px;
+}
+
+.batch-thumb {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  background: color-mix(in oklab, var(--surface) 87%, transparent);
+  display: grid;
+  gap: 5px;
+  text-align: left;
+}
+
+.batch-thumb img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--line) 72%, transparent);
+}
+
+.batch-thumb-name {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--ink-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.batch-thumb-state {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+
+.batch-thumb.active {
+  border-color: color-mix(in oklab, var(--brand) 56%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--brand) 28%, transparent);
+}
+
+.batch-thumb.approved {
+  border-color: color-mix(in oklab, var(--success) 44%, var(--line));
+}
+
+.batch-thumb.rejected {
+  border-color: color-mix(in oklab, var(--warning) 44%, var(--line));
+  opacity: 0.78;
+}
+
+.batch-final-download-btn {
+  border-color: color-mix(in oklab, var(--success) 45%, var(--line));
+  background: color-mix(in oklab, var(--success) 18%, transparent);
+}
+
 .batch-box {
   border: 1px solid var(--line);
   border-radius: 10px;

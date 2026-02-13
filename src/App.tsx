@@ -18,6 +18,8 @@ import type {
 const MIN_MANUAL_BOX_SIZE = 12
 const DEFAULT_JPEG_QUALITY = 0.82
 const DEFAULT_MAX_LONG_EDGE = 1920
+const BATCH_MAX_FILE_COUNT = 20
+const BATCH_MAX_TOTAL_BYTES = 150 * 1024 * 1024
 const MOBILE_BATCH_DETECTION_MAX_LONG_EDGE = 1280
 const DESKTOP_BATCH_DETECTION_MAX_LONG_EDGE = 1920
 const MOBILE_BATCH_COOLDOWN_MS = 40
@@ -51,6 +53,10 @@ interface BatchResult {
   outputWidth?: number
   outputHeight?: number
   errorMessage?: string
+  outputBlob?: Blob
+  previewUrl?: string
+  downloadName?: string
+  approvedForDownload?: boolean
 }
 
 interface ExportOptions {
@@ -566,6 +572,7 @@ function App() {
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const sourceImageRef = useRef<HTMLImageElement | null>(null)
   const activeObjectUrlRef = useRef<string | null>(null)
+  const batchPreviewUrlsRef = useRef<string[]>([])
   const batchInputRef = useRef<HTMLInputElement | null>(null)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const idSequenceRef = useRef(1)
@@ -615,9 +622,11 @@ function App() {
   const [isDragging, setIsDragging] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
   const [isBatchProcessing, setIsBatchProcessing] = useState(false)
+  const [isBatchDownloadPending, setIsBatchDownloadPending] = useState(false)
   const [drawModeEnabled, setDrawModeEnabled] = useState(false)
   const [draftRect, setDraftRect] = useState<DetectionRect | null>(null)
   const [batchResults, setBatchResults] = useState<BatchResult[]>([])
+  const [selectedBatchResultId, setSelectedBatchResultId] = useState<string | null>(null)
   const [isDownloadGuideOpen, setIsDownloadGuideOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState(
     ENABLE_PLATE_DETECTION
@@ -736,13 +745,34 @@ function App() {
     }
   }, [])
 
+  const revokeBatchPreviewUrls = useCallback(() => {
+    if (batchPreviewUrlsRef.current.length === 0) {
+      return
+    }
+
+    for (const previewUrl of batchPreviewUrlsRef.current) {
+      URL.revokeObjectURL(previewUrl)
+    }
+
+    batchPreviewUrlsRef.current = []
+  }, [])
+
+  const clearBatchReviewState = useCallback(() => {
+    revokeBatchPreviewUrls()
+    setBatchResults([])
+    setSelectedBatchResultId(null)
+    setIsBatchDownloadPending(false)
+  }, [revokeBatchPreviewUrls])
+
   useEffect(() => {
     return () => {
       if (activeObjectUrlRef.current) {
         URL.revokeObjectURL(activeObjectUrlRef.current)
       }
+
+      revokeBatchPreviewUrls()
     }
-  }, [])
+  }, [revokeBatchPreviewUrls])
 
   const createRegion = useCallback(
     (kind: RegionKind, rect: DetectionRect, active = true): MaskRegion => {
@@ -1021,6 +1051,7 @@ function App() {
       setDraftRect(null)
       setDrawModeEnabled(false)
       setRegions([])
+      clearBatchReviewState()
 
       try {
         const { image, objectUrl } = await loadImageFromFile(file)
@@ -1050,7 +1081,7 @@ function App() {
         setStatusMessage(message)
       }
     },
-    [isBatchProcessing, isPrepared, runAutoScan],
+    [clearBatchReviewState, isBatchProcessing, isPrepared, runAutoScan],
   )
 
   const processBatchFiles = useCallback(
@@ -1072,6 +1103,21 @@ function App() {
         return
       }
 
+      if (imageFiles.length > BATCH_MAX_FILE_COUNT) {
+        setStatusMessage(
+          `일괄 처리 제한: 최대 ${BATCH_MAX_FILE_COUNT}장까지 선택할 수 있습니다. 현재 ${imageFiles.length}장 선택됨`,
+        )
+        return
+      }
+
+      const totalBytes = imageFiles.reduce((sum, file) => sum + file.size, 0)
+      if (totalBytes > BATCH_MAX_TOTAL_BYTES) {
+        setStatusMessage(
+          `일괄 처리 제한: 총 용량은 최대 ${formatBytes(BATCH_MAX_TOTAL_BYTES)}까지 가능합니다. 현재 ${formatBytes(totalBytes)}`,
+        )
+        return
+      }
+
       if (isScanning) {
         setStatusMessage('단일 이미지 스캔이 끝난 뒤 다시 시도해 주세요.')
         return
@@ -1084,9 +1130,24 @@ function App() {
         ? MOBILE_BATCH_DETECTION_MAX_LONG_EDGE
         : DESKTOP_BATCH_DETECTION_MAX_LONG_EDGE
 
+      clearBatchReviewState()
+      if (activeObjectUrlRef.current) {
+        URL.revokeObjectURL(activeObjectUrlRef.current)
+        activeObjectUrlRef.current = null
+      }
+      sourceImageRef.current = null
+      if (sourceCanvasRef.current) {
+        sourceCanvasRef.current.width = 0
+        sourceCanvasRef.current.height = 0
+      }
+      sourceCanvasRef.current = null
+      setImageMeta(null)
+      setRegions([])
+
       setIsBatchProcessing(true)
       setDrawModeEnabled(false)
       setDraftRect(null)
+      setIsBatchDownloadPending(false)
 
       const initialResults = imageFiles.map((file, index) => ({
         id: `batch-${Date.now()}-${index}`,
@@ -1103,10 +1164,9 @@ function App() {
           : `${imageFiles.length}장 일괄 처리를 시작합니다. (번호판 기능 임시 보류: 얼굴 중심 모드)`
       setBatchResults(initialResults)
       setStatusMessage(
-        `${batchStartBaseMessage} 일괄 처리 중에는 미리보기 패널 대신 로그에서 진행 상황을 확인할 수 있습니다.`,
+        `${batchStartBaseMessage} 완료 후 썸네일에서 결과를 확인하고 최종 승인 다운로드를 진행할 수 있습니다.`,
       )
 
-      const zip = new JSZip()
       let successCount = 0
       let failureCount = 0
       let inputBytesTotal = 0
@@ -1174,10 +1234,11 @@ function App() {
               maskStyle,
               exportOptions,
             )
+            const previewUrl = URL.createObjectURL(exported.blob)
+            const downloadName = `${stripExtension(file.name)}-masked.jpg`
+            batchPreviewUrlsRef.current.push(previewUrl)
 
             outputBytesTotal += exported.blob.size
-            zip.file(`${stripExtension(file.name)}-masked.jpg`, exported.blob)
-
             successCount += 1
 
             setBatchResults((prev) =>
@@ -1191,10 +1252,15 @@ function App() {
                       outputBytes: exported.blob.size,
                       outputWidth: exported.width,
                       outputHeight: exported.height,
+                      outputBlob: exported.blob,
+                      previewUrl,
+                      downloadName,
+                      approvedForDownload: true,
                     }
                   : item,
               ),
             )
+            setSelectedBatchResultId((prev) => prev ?? resultId)
           } catch (error) {
             failureCount += 1
             const message = toErrorMessage(
@@ -1238,21 +1304,6 @@ function App() {
           }
         }
 
-        if (successCount > 0) {
-          const zipBlob = await zip.generateAsync({ type: 'blob' })
-          const zipUrl = URL.createObjectURL(zipBlob)
-
-          const anchor = document.createElement('a')
-          anchor.href = zipUrl
-          anchor.download = `masked-batch-${new Date()
-            .toISOString()
-            .replace(/[.:]/g, '-')}.zip`
-          anchor.click()
-
-          URL.revokeObjectURL(zipUrl)
-          setIsDownloadGuideOpen(true)
-        }
-
         const plateModeNote = plateDetectionEnabled
           ? ''
           : ENABLE_PLATE_DETECTION
@@ -1267,7 +1318,7 @@ function App() {
               ? ` · 총 ${formatBytes(inputBytesTotal)} → ${formatBytes(outputBytesTotal)}`
               : ''
           setStatusMessage(
-            `일괄 처리 완료: 성공 ${successCount}장 / 실패 ${failureCount}장${reductionText}${plateModeNote} (ZIP 다운로드 완료)`,
+            `일괄 처리 완료: 성공 ${successCount}장 / 실패 ${failureCount}장${reductionText}${plateModeNote} · 썸네일 확인 후 최종 승인 ZIP 다운로드를 눌러 주세요.`,
           )
         } else {
           const reductionText =
@@ -1275,7 +1326,7 @@ function App() {
               ? ` (${formatBytes(inputBytesTotal)} → ${formatBytes(outputBytesTotal)})`
               : ''
           setStatusMessage(
-            `일괄 처리 완료: ${successCount}장 ZIP 다운로드 완료${reductionText}${plateModeNote}`,
+            `일괄 처리 완료: ${successCount}장 처리됨${reductionText}${plateModeNote} · 썸네일 확인 후 최종 승인 ZIP 다운로드를 눌러 주세요.`,
           )
         }
       } catch (error) {
@@ -1290,6 +1341,7 @@ function App() {
       }
     },
     [
+      clearBatchReviewState,
       downloadGuide.isMobile,
       exportOptions,
       isMobileMode,
@@ -1503,6 +1555,77 @@ function App() {
     [isBatchProcessing, isMobileMode, loadFile, processBatchFiles],
   )
 
+  const toggleBatchApproval = useCallback((id: string) => {
+    setBatchResults((prev) =>
+      prev.map((item) =>
+        item.id === id && item.status === 'done'
+          ? { ...item, approvedForDownload: !item.approvedForDownload }
+          : item,
+      ),
+    )
+  }, [])
+
+  const setBatchApprovalForAllDone = useCallback((approved: boolean) => {
+    setBatchResults((prev) =>
+      prev.map((item) =>
+        item.status === 'done' ? { ...item, approvedForDownload: approved } : item,
+      ),
+    )
+  }, [])
+
+  const downloadApprovedBatch = useCallback(async () => {
+    if (isBatchProcessing || isBatchDownloadPending) {
+      return
+    }
+
+    const approvedItems = batchResults.filter(
+      (item) => item.status === 'done' && item.approvedForDownload && item.outputBlob,
+    )
+
+    if (approvedItems.length === 0) {
+      setStatusMessage('다운로드 승인을 받은 결과가 없습니다. 썸네일에서 확인 후 승인해 주세요.')
+      return
+    }
+
+    setIsBatchDownloadPending(true)
+
+    try {
+      const zip = new JSZip()
+
+      for (const item of approvedItems) {
+        if (!item.outputBlob) {
+          continue
+        }
+
+        zip.file(
+          item.downloadName ?? `${stripExtension(item.fileName)}-masked.jpg`,
+          item.outputBlob,
+        )
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const zipUrl = URL.createObjectURL(zipBlob)
+
+      const anchor = document.createElement('a')
+      anchor.href = zipUrl
+      anchor.download = `masked-batch-${new Date()
+        .toISOString()
+        .replace(/[.:]/g, '-')}.zip`
+      anchor.click()
+
+      URL.revokeObjectURL(zipUrl)
+      setIsDownloadGuideOpen(true)
+      setStatusMessage(
+        `최종 승인 다운로드 완료: ${approvedItems.length}장 ZIP 저장을 시작했습니다.`,
+      )
+    } catch (error) {
+      const message = toErrorMessage(error, '승인 ZIP 생성 중 오류가 발생했습니다.')
+      setStatusMessage(`승인 ZIP 다운로드 실패: ${message}`)
+    } finally {
+      setIsBatchDownloadPending(false)
+    }
+  }, [batchResults, isBatchDownloadPending, isBatchProcessing])
+
   const downloadMaskedImage = useCallback(async () => {
     const sourceCanvas = sourceCanvasRef.current
 
@@ -1612,6 +1735,42 @@ function App() {
     (item) => item.status === 'failed',
   ).length
   const batchFinishedCount = batchSuccessCount + batchFailedCount
+  const batchReviewItems = useMemo(
+    () =>
+      batchResults.filter(
+        (item) =>
+          item.status === 'done' &&
+          Boolean(item.previewUrl) &&
+          Boolean(item.outputBlob),
+      ),
+    [batchResults],
+  )
+  const batchApprovedCount = batchReviewItems.filter(
+    (item) => item.approvedForDownload,
+  ).length
+  const selectedBatchResult = useMemo(() => {
+    if (batchReviewItems.length === 0) {
+      return null
+    }
+
+    return (
+      batchReviewItems.find((item) => item.id === selectedBatchResultId) ??
+      batchReviewItems[0]
+    )
+  }, [batchReviewItems, selectedBatchResultId])
+
+  useEffect(() => {
+    if (batchReviewItems.length === 0) {
+      if (selectedBatchResultId !== null) {
+        setSelectedBatchResultId(null)
+      }
+      return
+    }
+
+    if (!batchReviewItems.some((item) => item.id === selectedBatchResultId)) {
+      setSelectedBatchResultId(batchReviewItems[0].id)
+    }
+  }, [batchReviewItems, selectedBatchResultId])
 
   const hasImage = Boolean(imageMeta)
 
@@ -1755,7 +1914,7 @@ function App() {
               <span className="dropzone-subtitle">
                 {isMobileMode
                   ? '모바일에서는 한 번에 한 장만 선택할 수 있습니다.'
-                  : '2장 이상 선택/드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다.'}
+                  : `2장 이상 선택/드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다. (최대 ${BATCH_MAX_FILE_COUNT}장, 총 ${formatBytes(BATCH_MAX_TOTAL_BYTES)})`}
               </span>
             </label>
 
@@ -1987,6 +2146,108 @@ function App() {
               </button>
             </div>
 
+            {batchReviewItems.length > 0 && (
+              <section className="batch-review">
+                <div className="batch-review-head">
+                  <h3>일괄 결과 검토</h3>
+                  <p>썸네일을 눌러 개별 결과를 확인하고 다운로드 승인을 선택해 주세요.</p>
+                </div>
+
+                {selectedBatchResult?.previewUrl && (
+                  <div className="batch-review-preview">
+                    <img
+                      src={selectedBatchResult.previewUrl}
+                      alt={`${selectedBatchResult.fileName} 처리 결과`}
+                    />
+                  </div>
+                )}
+
+                {selectedBatchResult && (
+                  <p className="batch-review-meta">
+                    {selectedBatchResult.fileName} ·{' '}
+                    {selectedBatchResult.outputWidth ?? '-'}x
+                    {selectedBatchResult.outputHeight ?? '-'} ·{' '}
+                    {selectedBatchResult.outputBytes
+                      ? formatBytes(selectedBatchResult.outputBytes)
+                      : '-'}{' '}
+                    ·{' '}
+                    {selectedBatchResult.approvedForDownload
+                      ? '다운로드 승인됨'
+                      : '다운로드 제외됨'}
+                  </p>
+                )}
+
+                <div className="batch-review-controls">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedBatchResult) {
+                        toggleBatchApproval(selectedBatchResult.id)
+                      }
+                    }}
+                  >
+                    {selectedBatchResult?.approvedForDownload
+                      ? '선택 이미지 제외'
+                      : '선택 이미지 승인'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBatchApprovalForAllDone(true)}
+                  >
+                    전체 승인
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBatchApprovalForAllDone(false)}
+                  >
+                    전체 제외
+                  </button>
+                </div>
+
+                <div className="batch-thumb-grid">
+                  {batchReviewItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`batch-thumb ${
+                        selectedBatchResult?.id === item.id ? 'active' : ''
+                      } ${item.approvedForDownload ? 'approved' : 'rejected'}`}
+                      onClick={() => setSelectedBatchResultId(item.id)}
+                    >
+                      {item.previewUrl && (
+                        <img
+                          src={item.previewUrl}
+                          alt={`${item.fileName} 썸네일`}
+                          loading="lazy"
+                        />
+                      )}
+                      <span className="batch-thumb-name">{item.fileName}</span>
+                      <span className="batch-thumb-state">
+                        {item.approvedForDownload ? '승인됨' : '제외됨'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  className="batch-final-download-btn"
+                  onClick={() => {
+                    void downloadApprovedBatch()
+                  }}
+                  disabled={
+                    isBatchProcessing ||
+                    isBatchDownloadPending ||
+                    batchApprovedCount === 0
+                  }
+                >
+                  {isBatchDownloadPending
+                    ? 'ZIP 생성 중...'
+                    : `최종 승인 ZIP 다운로드 (${batchApprovedCount}/${batchReviewItems.length})`}
+                </button>
+              </section>
+            )}
+
             <section className="download-assist">
               {downloadGuide.isKakaoInApp && (
                 <div className="inapp-warning-card">
@@ -2066,8 +2327,8 @@ function App() {
                         {item.status === 'processing' && '처리 중...'}
                         {item.status === 'done' &&
                           (ENABLE_PLATE_DETECTION
-                            ? `얼굴 ${item.faceCount} / 번호판 ${item.plateCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`
-                            : `얼굴 ${item.faceCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`)}
+                            ? `얼굴 ${item.faceCount} / 번호판 ${item.plateCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'} · ${item.approvedForDownload ? '승인됨' : '제외됨'}`
+                            : `얼굴 ${item.faceCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'} · ${item.approvedForDownload ? '승인됨' : '제외됨'}`)}
                         {item.status === 'failed' &&
                           `실패: ${item.errorMessage ?? '알 수 없는 오류'}`}
                       </div>

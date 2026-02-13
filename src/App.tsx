@@ -32,18 +32,22 @@ const PLATE_WARMUP_TIMEOUT_MS = 35_000
 const PLATE_DETECTION_TIMEOUT_MS = 20_000
 const THEME_STORAGE_KEY = 'face_masker_theme_v1'
 const DEFAULT_EDITOR_QUALITY = 0.86
-const DEFAULT_EDITOR_MAX_LONG_EDGE = 1920
 const EDITOR_MIN_CROP_SIZE = 20
 const DEFAULT_EDITOR_PDF_COVERAGE = 92
 const EDITOR_PDF_MIN_MARGIN_MM = 4
 const A4_WIDTH_MM = 210
 const A4_HEIGHT_MM = 297
+const EDITOR_CUSTOM_MIN_DIMENSION = 64
+const EDITOR_CUSTOM_MAX_DIMENSION = 8000
 
 type ThemeMode = 'dark' | 'light'
 type PageKey = 'tool' | 'editor' | 'about' | 'privacy' | 'contact'
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
 type EditorOutputFormat = 'jpeg' | 'png' | 'webp' | 'pdf'
 type EditorPdfOrientation = 'auto' | 'portrait' | 'landscape'
+type EditorResizeMode = 'original' | 'preset-70' | 'preset-50' | 'preset-30' | 'custom'
+type EditorCustomResizeMode = 'fit-width' | 'fit-height' | 'frame'
+type EditorCustomFrameFit = 'contain' | 'cover'
 type EditorPdfPlacement =
   | 'top-left'
   | 'top-center'
@@ -76,6 +80,17 @@ const EDITOR_PDF_PLACEMENT_OPTIONS: Array<{
   { value: 'bottom-left', label: '좌하단', symbol: '↙' },
   { value: 'bottom-center', label: '하단 중앙', symbol: '↓' },
   { value: 'bottom-right', label: '우하단', symbol: '↘' },
+]
+
+const EDITOR_RESIZE_MODE_OPTIONS: Array<{
+  value: EditorResizeMode
+  label: string
+}> = [
+  { value: 'original', label: '원본 100%' },
+  { value: 'preset-70', label: '70%' },
+  { value: 'preset-50', label: '50%' },
+  { value: 'preset-30', label: '30%' },
+  { value: 'custom', label: 'Custom' },
 ]
 
 interface BatchResult {
@@ -115,6 +130,22 @@ interface DownloadGuideInfo {
   steps: string[]
   footnote: string
   isKakaoInApp?: boolean
+}
+
+interface EditorOutputPlan {
+  sourceWidth: number
+  sourceHeight: number
+  outputWidth: number
+  outputHeight: number
+  sourceSampleX: number
+  sourceSampleY: number
+  sourceSampleWidth: number
+  sourceSampleHeight: number
+  widthScalePercent: number
+  heightScalePercent: number
+  areaScalePercent: number
+  reducedAreaPercent: number
+  sampleAreaPercent: number
 }
 
 function parsePageFromHash(hash: string): PageKey {
@@ -490,6 +521,29 @@ function getEditorPdfPlacementFactors(placement: EditorPdfPlacement): {
   return { xFactor: 0.5, yFactor: 0.5 }
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function sanitizeEditorDimension(
+  value: number,
+  fallback: number,
+  max: number,
+): number {
+  const min = Math.min(EDITOR_CUSTOM_MIN_DIMENSION, max)
+
+  if (!Number.isFinite(value)) {
+    return clampNumber(Math.round(fallback), min, max)
+  }
+
+  return clampNumber(Math.round(value), min, max)
+}
+
+function getEditorResizeModeLabel(mode: EditorResizeMode): string {
+  const option = EDITOR_RESIZE_MODE_OPTIONS.find((item) => item.value === mode)
+  return option?.label ?? '원본 100%'
+}
+
 function sanitizeCropRect(
   rect: DetectionRect,
   maxWidth: number,
@@ -833,6 +887,15 @@ function App() {
   )
   const [editorOutputFormat, setEditorOutputFormat] =
     useState<EditorOutputFormat>('jpeg')
+  const [editorResizeMode, setEditorResizeMode] = useState<EditorResizeMode>('original')
+  const [editorCustomResizeMode, setEditorCustomResizeMode] =
+    useState<EditorCustomResizeMode>('fit-width')
+  const [editorCustomFrameFit, setEditorCustomFrameFit] =
+    useState<EditorCustomFrameFit>('contain')
+  const [editorCustomWidth, setEditorCustomWidth] = useState(1280)
+  const [editorCustomHeight, setEditorCustomHeight] = useState(1280)
+  const [editorCustomPlacement, setEditorCustomPlacement] =
+    useState<EditorPdfPlacement>('center')
   const [editorPdfOrientation, setEditorPdfOrientation] =
     useState<EditorPdfOrientation>('auto')
   const [editorPdfPlacement, setEditorPdfPlacement] =
@@ -841,9 +904,6 @@ function App() {
     DEFAULT_EDITOR_PDF_COVERAGE,
   )
   const [editorQuality, setEditorQuality] = useState(DEFAULT_EDITOR_QUALITY)
-  const [editorMaxLongEdge, setEditorMaxLongEdge] = useState(
-    DEFAULT_EDITOR_MAX_LONG_EDGE,
-  )
   const [editorCropRect, setEditorCropRect] = useState<DetectionRect | null>(null)
   const [editorCropDraft, setEditorCropDraft] = useState<DetectionRect | null>(null)
   const [isEditorCropMode, setIsEditorCropMode] = useState(false)
@@ -1864,6 +1924,12 @@ function App() {
         width: image.naturalWidth,
         height: image.naturalHeight,
       })
+      setEditorResizeMode('original')
+      setEditorCustomResizeMode('fit-width')
+      setEditorCustomFrameFit('contain')
+      setEditorCustomPlacement('center')
+      setEditorCustomWidth(image.naturalWidth)
+      setEditorCustomHeight(image.naturalHeight)
       setEditorStatusMessage(
         '이미지를 불러왔습니다. 자르기/크기/포맷을 설정한 뒤 다운로드하세요.',
       )
@@ -2379,20 +2445,216 @@ function App() {
     return normalizedEditorCrop
   }, [editorCropDraft, editorImageMeta, normalizedEditorCrop])
 
-  const editorOutputSize = useMemo(() => {
+  const editorCustomDimensionLimits = useMemo(() => {
     if (!normalizedEditorCrop) {
       return null
     }
 
-    const cropWidth = Math.max(1, Math.round(normalizedEditorCrop.width))
-    const cropHeight = Math.max(1, Math.round(normalizedEditorCrop.height))
+    const sourceWidth = Math.max(1, Math.round(normalizedEditorCrop.width))
+    const sourceHeight = Math.max(1, Math.round(normalizedEditorCrop.height))
 
-    if (editorMaxLongEdge <= 0) {
-      return { width: cropWidth, height: cropHeight }
+    return {
+      maxWidth: Math.max(1, Math.min(EDITOR_CUSTOM_MAX_DIMENSION, sourceWidth)),
+      maxHeight: Math.max(1, Math.min(EDITOR_CUSTOM_MAX_DIMENSION, sourceHeight)),
+    }
+  }, [normalizedEditorCrop])
+
+  useEffect(() => {
+    if (!editorCustomDimensionLimits) {
+      return
     }
 
-    return calculateTargetSize(cropWidth, cropHeight, editorMaxLongEdge)
-  }, [editorMaxLongEdge, normalizedEditorCrop])
+    setEditorCustomWidth((prev) =>
+      sanitizeEditorDimension(
+        prev,
+        editorCustomDimensionLimits.maxWidth,
+        editorCustomDimensionLimits.maxWidth,
+      ),
+    )
+    setEditorCustomHeight((prev) =>
+      sanitizeEditorDimension(
+        prev,
+        editorCustomDimensionLimits.maxHeight,
+        editorCustomDimensionLimits.maxHeight,
+      ),
+    )
+  }, [editorCustomDimensionLimits])
+
+  const editorCustomPlacementFactors = useMemo(
+    () => getEditorPdfPlacementFactors(editorCustomPlacement),
+    [editorCustomPlacement],
+  )
+
+  const editorOutputPlan = useMemo<EditorOutputPlan | null>(() => {
+    if (!normalizedEditorCrop) {
+      return null
+    }
+
+    const sourceWidth = Math.max(1, Math.round(normalizedEditorCrop.width))
+    const sourceHeight = Math.max(1, Math.round(normalizedEditorCrop.height))
+    const sourceArea = sourceWidth * sourceHeight
+    const sourceAspect = sourceWidth / sourceHeight
+
+    let outputWidth = sourceWidth
+    let outputHeight = sourceHeight
+    let sourceSampleX = 0
+    let sourceSampleY = 0
+    let sourceSampleWidth = sourceWidth
+    let sourceSampleHeight = sourceHeight
+
+    if (editorResizeMode === 'preset-70') {
+      outputWidth = Math.max(1, Math.round(sourceWidth * 0.7))
+      outputHeight = Math.max(1, Math.round(sourceHeight * 0.7))
+    } else if (editorResizeMode === 'preset-50') {
+      outputWidth = Math.max(1, Math.round(sourceWidth * 0.5))
+      outputHeight = Math.max(1, Math.round(sourceHeight * 0.5))
+    } else if (editorResizeMode === 'preset-30') {
+      outputWidth = Math.max(1, Math.round(sourceWidth * 0.3))
+      outputHeight = Math.max(1, Math.round(sourceHeight * 0.3))
+    } else if (editorResizeMode === 'custom') {
+      const maxWidth = Math.max(
+        1,
+        Math.min(EDITOR_CUSTOM_MAX_DIMENSION, sourceWidth),
+      )
+      const maxHeight = Math.max(
+        1,
+        Math.min(EDITOR_CUSTOM_MAX_DIMENSION, sourceHeight),
+      )
+      const customWidth = sanitizeEditorDimension(
+        editorCustomWidth,
+        sourceWidth,
+        maxWidth,
+      )
+      const customHeight = sanitizeEditorDimension(
+        editorCustomHeight,
+        sourceHeight,
+        maxHeight,
+      )
+
+      if (editorCustomResizeMode === 'fit-width') {
+        outputWidth = customWidth
+        outputHeight = Math.max(
+          1,
+          Math.round(sourceHeight * (customWidth / sourceWidth)),
+        )
+      } else if (editorCustomResizeMode === 'fit-height') {
+        outputHeight = customHeight
+        outputWidth = Math.max(
+          1,
+          Math.round(sourceWidth * (customHeight / sourceHeight)),
+        )
+      } else if (editorCustomFrameFit === 'cover') {
+        outputWidth = customWidth
+        outputHeight = customHeight
+
+        const targetAspect = customWidth / customHeight
+
+        if (sourceAspect > targetAspect) {
+          sourceSampleHeight = sourceHeight
+          sourceSampleWidth = Math.max(1, Math.round(sourceHeight * targetAspect))
+        } else {
+          sourceSampleWidth = sourceWidth
+          sourceSampleHeight = Math.max(1, Math.round(sourceWidth / targetAspect))
+        }
+
+        sourceSampleX = Math.round(
+          (sourceWidth - sourceSampleWidth) * editorCustomPlacementFactors.xFactor,
+        )
+        sourceSampleY = Math.round(
+          (sourceHeight - sourceSampleHeight) * editorCustomPlacementFactors.yFactor,
+        )
+      } else {
+        const fitScale = Math.min(
+          customWidth / sourceWidth,
+          customHeight / sourceHeight,
+        )
+        outputWidth = Math.max(1, Math.round(sourceWidth * fitScale))
+        outputHeight = Math.max(1, Math.round(sourceHeight * fitScale))
+      }
+    }
+
+    sourceSampleX = clampNumber(sourceSampleX, 0, Math.max(0, sourceWidth - sourceSampleWidth))
+    sourceSampleY = clampNumber(sourceSampleY, 0, Math.max(0, sourceHeight - sourceSampleHeight))
+
+    const widthScalePercent =
+      Math.round((outputWidth / sourceWidth) * 1000) / 10
+    const heightScalePercent =
+      Math.round((outputHeight / sourceHeight) * 1000) / 10
+    const areaScalePercent =
+      Math.round(((outputWidth * outputHeight) / sourceArea) * 1000) / 10
+    const reducedAreaPercent = Math.max(0, Math.round((100 - areaScalePercent) * 10) / 10)
+    const sampleAreaPercent =
+      Math.round(((sourceSampleWidth * sourceSampleHeight) / sourceArea) * 1000) / 10
+
+    return {
+      sourceWidth,
+      sourceHeight,
+      outputWidth,
+      outputHeight,
+      sourceSampleX,
+      sourceSampleY,
+      sourceSampleWidth,
+      sourceSampleHeight,
+      widthScalePercent,
+      heightScalePercent,
+      areaScalePercent,
+      reducedAreaPercent,
+      sampleAreaPercent,
+    }
+  }, [
+    normalizedEditorCrop,
+    editorResizeMode,
+    editorCustomResizeMode,
+    editorCustomFrameFit,
+    editorCustomWidth,
+    editorCustomHeight,
+    editorCustomPlacementFactors,
+  ])
+
+  const editorOutputSize = useMemo(() => {
+    if (!editorOutputPlan) {
+      return null
+    }
+
+    return {
+      width: editorOutputPlan.outputWidth,
+      height: editorOutputPlan.outputHeight,
+    }
+  }, [editorOutputPlan])
+
+  const editorResizePreviewLayout = useMemo(() => {
+    if (!editorOutputPlan) {
+      return null
+    }
+
+    const outputWidthPercent =
+      (editorOutputPlan.outputWidth / editorOutputPlan.sourceWidth) * 100
+    const outputHeightPercent =
+      (editorOutputPlan.outputHeight / editorOutputPlan.sourceHeight) * 100
+    const sampleLeftPercent =
+      (editorOutputPlan.sourceSampleX / editorOutputPlan.sourceWidth) * 100
+    const sampleTopPercent =
+      (editorOutputPlan.sourceSampleY / editorOutputPlan.sourceHeight) * 100
+    const sampleWidthPercent =
+      (editorOutputPlan.sourceSampleWidth / editorOutputPlan.sourceWidth) * 100
+    const sampleHeightPercent =
+      (editorOutputPlan.sourceSampleHeight / editorOutputPlan.sourceHeight) * 100
+
+    return {
+      stageAspectRatio: `${editorOutputPlan.sourceWidth} / ${editorOutputPlan.sourceHeight}`,
+      outputLeftPercent: Math.max(0, (100 - outputWidthPercent) / 2),
+      outputTopPercent: Math.max(0, (100 - outputHeightPercent) / 2),
+      outputWidthPercent,
+      outputHeightPercent,
+      sampleLeftPercent,
+      sampleTopPercent,
+      sampleWidthPercent,
+      sampleHeightPercent,
+      hasSourceCrop:
+        editorOutputPlan.sourceSampleWidth < editorOutputPlan.sourceWidth ||
+        editorOutputPlan.sourceSampleHeight < editorOutputPlan.sourceHeight,
+    }
+  }, [editorOutputPlan])
 
   const resolvedEditorPdfOrientation = useMemo(() => {
     if (!editorOutputSize) {
@@ -2479,7 +2741,8 @@ function App() {
       !sourceCanvas ||
       !editorImageMeta ||
       !normalizedEditorCrop ||
-      !editorOutputSize
+      !editorOutputSize ||
+      !editorOutputPlan
     ) {
       return
     }
@@ -2513,8 +2776,8 @@ function App() {
         cropCanvas.height,
       )
 
-      exportCanvas.width = editorOutputSize.width
-      exportCanvas.height = editorOutputSize.height
+      exportCanvas.width = editorOutputPlan.outputWidth
+      exportCanvas.height = editorOutputPlan.outputHeight
 
       const exportContext = exportCanvas.getContext('2d')
 
@@ -2526,14 +2789,14 @@ function App() {
       exportContext.imageSmoothingQuality = 'high'
       exportContext.drawImage(
         cropCanvas,
+        editorOutputPlan.sourceSampleX,
+        editorOutputPlan.sourceSampleY,
+        editorOutputPlan.sourceSampleWidth,
+        editorOutputPlan.sourceSampleHeight,
         0,
         0,
-        cropCanvas.width,
-        cropCanvas.height,
-        0,
-        0,
-        exportCanvas.width,
-        exportCanvas.height,
+        editorOutputPlan.outputWidth,
+        editorOutputPlan.outputHeight,
       )
 
       let blob: Blob
@@ -2617,7 +2880,7 @@ function App() {
         const outputSummary =
           editorOutputFormat === 'pdf'
             ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} ${getEditorPdfPlacementLabel(editorPdfPlacement)} (${normalizedEditorPdfCoverage}%)`
-            : `${editorOutputSize.width}x${editorOutputSize.height}`
+            : `${editorOutputSize.width}x${editorOutputSize.height} (${getEditorResizeModeLabel(editorResizeMode)})`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${outputSummary}`,
         )
@@ -2625,7 +2888,7 @@ function App() {
         const outputSummary =
           editorOutputFormat === 'pdf'
             ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} ${getEditorPdfPlacementLabel(editorPdfPlacement)} (${normalizedEditorPdfCoverage}%)`
-            : `${editorOutputSize.width}x${editorOutputSize.height}`
+            : `${editorOutputSize.width}x${editorOutputSize.height} (${getEditorResizeModeLabel(editorResizeMode)})`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${outputSummary}`,
         )
@@ -2643,9 +2906,11 @@ function App() {
   }, [
     editorImageMeta,
     editorOutputFormat,
+    editorOutputPlan,
     editorOutputSize,
     editorPdfPlacement,
     editorPdfPlacementFactors,
+    editorResizeMode,
     resolvedEditorPdfOrientation,
     editorQuality,
     normalizedEditorPdfCoverage,
@@ -3343,9 +3608,9 @@ function App() {
           <p className="eyebrow">브라우저 로컬 편집</p>
           <h1>이미지 크기·용량·자르기 간편 편집</h1>
           <p className="hero-description">
-            서버 업로드 없이 한 장씩 빠르게 편집할 수 있습니다. 자르기, 해상도 축소, 형식
-            변환(JPG/PNG/WEBP/PDF)을 적용한 뒤 바로 저장하세요. PDF는 A4 스캔 스타일로
-            변환됩니다.
+            서버 업로드 없이 한 장씩 빠르게 편집할 수 있습니다. 자르기, 크기 프리셋(70/50/30),
+            커스텀 리사이즈(가로/세로 기준·프레임 잘라내기), 형식 변환(JPG/PNG/WEBP/PDF)을
+            적용한 뒤 바로 저장하세요. PDF는 A4 스캔 스타일로 변환됩니다.
           </p>
         </section>
 
@@ -3428,6 +3693,203 @@ function App() {
                   <option value="pdf">PDF (A4 문서형)</option>
                 </select>
 
+                <label className="optimize-field">
+                  크기 프리셋
+                  <strong>{getEditorResizeModeLabel(editorResizeMode)}</strong>
+                </label>
+                <div className="resize-mode-grid" role="group" aria-label="이미지 크기 프리셋">
+                  {EDITOR_RESIZE_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={editorResizeMode === option.value ? 'active' : ''}
+                      onClick={() => setEditorResizeMode(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                {editorResizeMode === 'custom' ? (
+                  <>
+                    <label className="optimize-field">
+                      Custom 방식
+                      <strong>
+                        {editorCustomResizeMode === 'fit-width'
+                          ? '가로 기준'
+                          : editorCustomResizeMode === 'fit-height'
+                            ? '세로 기준'
+                            : '사용자 프레임'}
+                      </strong>
+                    </label>
+                    <select
+                      value={editorCustomResizeMode}
+                      onChange={(event) =>
+                        setEditorCustomResizeMode(
+                          event.target.value as EditorCustomResizeMode,
+                        )
+                      }
+                    >
+                      <option value="fit-width">비율 고정 (가로 기준)</option>
+                      <option value="fit-height">비율 고정 (세로 기준)</option>
+                      <option value="frame">사용자 프레임 (가로x세로)</option>
+                    </select>
+
+                    {editorCustomResizeMode === 'fit-width' ? (
+                      <>
+                        <label className="optimize-field">
+                          가로(px)
+                          <strong>{editorCustomWidth}px</strong>
+                        </label>
+                        <input
+                          type="number"
+                          min={Math.min(
+                            EDITOR_CUSTOM_MIN_DIMENSION,
+                            editorCustomDimensionLimits?.maxWidth ??
+                              EDITOR_CUSTOM_MAX_DIMENSION,
+                          )}
+                          max={editorCustomDimensionLimits?.maxWidth ?? EDITOR_CUSTOM_MAX_DIMENSION}
+                          value={editorCustomWidth}
+                          onChange={(event) => {
+                            const parsed = Number.parseInt(event.target.value, 10)
+                            setEditorCustomWidth(
+                              Number.isFinite(parsed) ? parsed : EDITOR_CUSTOM_MIN_DIMENSION,
+                            )
+                          }}
+                        />
+                      </>
+                    ) : null}
+
+                    {editorCustomResizeMode === 'fit-height' ? (
+                      <>
+                        <label className="optimize-field">
+                          세로(px)
+                          <strong>{editorCustomHeight}px</strong>
+                        </label>
+                        <input
+                          type="number"
+                          min={Math.min(
+                            EDITOR_CUSTOM_MIN_DIMENSION,
+                            editorCustomDimensionLimits?.maxHeight ??
+                              EDITOR_CUSTOM_MAX_DIMENSION,
+                          )}
+                          max={
+                            editorCustomDimensionLimits?.maxHeight ??
+                            EDITOR_CUSTOM_MAX_DIMENSION
+                          }
+                          value={editorCustomHeight}
+                          onChange={(event) => {
+                            const parsed = Number.parseInt(event.target.value, 10)
+                            setEditorCustomHeight(
+                              Number.isFinite(parsed) ? parsed : EDITOR_CUSTOM_MIN_DIMENSION,
+                            )
+                          }}
+                        />
+                      </>
+                    ) : null}
+
+                    {editorCustomResizeMode === 'frame' ? (
+                      <>
+                        <label className="optimize-field">
+                          프레임 가로(px)
+                          <strong>{editorCustomWidth}px</strong>
+                        </label>
+                        <input
+                          type="number"
+                          min={Math.min(
+                            EDITOR_CUSTOM_MIN_DIMENSION,
+                            editorCustomDimensionLimits?.maxWidth ??
+                              EDITOR_CUSTOM_MAX_DIMENSION,
+                          )}
+                          max={editorCustomDimensionLimits?.maxWidth ?? EDITOR_CUSTOM_MAX_DIMENSION}
+                          value={editorCustomWidth}
+                          onChange={(event) => {
+                            const parsed = Number.parseInt(event.target.value, 10)
+                            setEditorCustomWidth(
+                              Number.isFinite(parsed) ? parsed : EDITOR_CUSTOM_MIN_DIMENSION,
+                            )
+                          }}
+                        />
+
+                        <label className="optimize-field">
+                          프레임 세로(px)
+                          <strong>{editorCustomHeight}px</strong>
+                        </label>
+                        <input
+                          type="number"
+                          min={Math.min(
+                            EDITOR_CUSTOM_MIN_DIMENSION,
+                            editorCustomDimensionLimits?.maxHeight ??
+                              EDITOR_CUSTOM_MAX_DIMENSION,
+                          )}
+                          max={
+                            editorCustomDimensionLimits?.maxHeight ??
+                            EDITOR_CUSTOM_MAX_DIMENSION
+                          }
+                          value={editorCustomHeight}
+                          onChange={(event) => {
+                            const parsed = Number.parseInt(event.target.value, 10)
+                            setEditorCustomHeight(
+                              Number.isFinite(parsed) ? parsed : EDITOR_CUSTOM_MIN_DIMENSION,
+                            )
+                          }}
+                        />
+
+                        <label className="optimize-field">
+                          프레임 처리
+                          <strong>
+                            {editorCustomFrameFit === 'cover'
+                              ? '프레임 채움(잘림)'
+                              : '비율 유지(안 잘림)'}
+                          </strong>
+                        </label>
+                        <select
+                          value={editorCustomFrameFit}
+                          onChange={(event) =>
+                            setEditorCustomFrameFit(
+                              event.target.value as EditorCustomFrameFit,
+                            )
+                          }
+                        >
+                          <option value="contain">비율 유지 (프레임 안 맞춤)</option>
+                          <option value="cover">프레임 채우기 (넘치는 영역 잘림)</option>
+                        </select>
+
+                        {editorCustomFrameFit === 'cover' ? (
+                          <>
+                            <label className="optimize-field">
+                              잘림 기준 위치
+                              <strong>
+                                {getEditorPdfPlacementLabel(editorCustomPlacement)}
+                              </strong>
+                            </label>
+                            <div
+                              className="pdf-position-grid"
+                              role="group"
+                              aria-label="잘림 기준 위치"
+                            >
+                              {EDITOR_PDF_PLACEMENT_OPTIONS.map((option) => (
+                                <button
+                                  key={`custom-${option.value}`}
+                                  type="button"
+                                  className={
+                                    editorCustomPlacement === option.value ? 'active' : ''
+                                  }
+                                  onClick={() => setEditorCustomPlacement(option.value)}
+                                  title={option.label}
+                                  aria-label={option.label}
+                                >
+                                  <span aria-hidden="true">{option.symbol}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+
                 {editorOutputFormat === 'pdf' ? (
                   <>
                     <label className="optimize-field">
@@ -3501,22 +3963,6 @@ function App() {
                   disabled={editorOutputFormat === 'png'}
                 />
 
-                <label className="optimize-field">
-                  최대 긴 변
-                  <strong>
-                    {editorMaxLongEdge <= 0 ? '원본 유지' : `${editorMaxLongEdge}px`}
-                  </strong>
-                </label>
-                <select
-                  value={editorMaxLongEdge}
-                  onChange={(event) => setEditorMaxLongEdge(Number(event.target.value))}
-                >
-                  <option value={0}>원본 유지</option>
-                  <option value={1280}>1280px (초절약)</option>
-                  <option value={1600}>1600px</option>
-                  <option value={1920}>1920px (권장)</option>
-                  <option value={2560}>2560px</option>
-                </select>
               </div>
             </div>
           </div>
@@ -3603,6 +4049,62 @@ function App() {
                 </div>
               )}
             </div>
+
+            {editorOutputPlan && editorResizePreviewLayout ? (
+              <div className="resize-preview-card">
+                <div className="resize-preview-head">
+                  <strong>크기 변경 미리보기</strong>
+                  <span>
+                    {`원본 대비 ${editorOutputPlan.areaScalePercent}% 유지 · ${editorOutputPlan.reducedAreaPercent}% 감소`}
+                  </span>
+                </div>
+                <div
+                  className="resize-preview-stage"
+                  style={{ aspectRatio: editorResizePreviewLayout.stageAspectRatio }}
+                >
+                  <div className="resize-source-frame" />
+                  {editorResizePreviewLayout.hasSourceCrop ? (
+                    <div
+                      className="resize-source-sample"
+                      style={{
+                        left: `${editorResizePreviewLayout.sampleLeftPercent}%`,
+                        top: `${editorResizePreviewLayout.sampleTopPercent}%`,
+                        width: `${editorResizePreviewLayout.sampleWidthPercent}%`,
+                        height: `${editorResizePreviewLayout.sampleHeightPercent}%`,
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    className="resize-output-footprint"
+                    style={{
+                      left: `${editorResizePreviewLayout.outputLeftPercent}%`,
+                      top: `${editorResizePreviewLayout.outputTopPercent}%`,
+                      width: `${editorResizePreviewLayout.outputWidthPercent}%`,
+                      height: `${editorResizePreviewLayout.outputHeightPercent}%`,
+                    }}
+                  >
+                    <span>
+                      {`${editorOutputPlan.outputWidth}x${editorOutputPlan.outputHeight}`}
+                    </span>
+                  </div>
+                </div>
+                <div className="resize-progress-track">
+                  <span
+                    style={{
+                      width: `${Math.max(2, Math.min(100, editorOutputPlan.areaScalePercent))}%`,
+                    }}
+                  />
+                </div>
+                <p className="resize-preview-caption">
+                  {`가로 ${editorOutputPlan.widthScalePercent}% · 세로 ${editorOutputPlan.heightScalePercent}%`}
+                </p>
+                {editorResizePreviewLayout.hasSourceCrop ? (
+                  <p className="resize-preview-caption">
+                    {`원본 사용 영역 ${editorOutputPlan.sampleAreaPercent}% (프레임 채우기 잘림 적용)`}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             {editorOutputFormat === 'pdf' && editorPdfPreviewLayout ? (
               <div className="pdf-layout-card">
@@ -3709,11 +4211,25 @@ function App() {
                   </strong>
                 </li>
                 <li>
-                  <span>최대 긴 변</span>
-                  <strong>
-                    {editorMaxLongEdge <= 0 ? '원본 유지' : `${editorMaxLongEdge}px`}
-                  </strong>
+                  <span>크기 모드</span>
+                  <strong>{getEditorResizeModeLabel(editorResizeMode)}</strong>
                 </li>
+                {editorOutputPlan ? (
+                  <li>
+                    <span>원본 대비</span>
+                    <strong>
+                      {`${editorOutputPlan.widthScalePercent}% x ${editorOutputPlan.heightScalePercent}%`}
+                    </strong>
+                  </li>
+                ) : null}
+                {editorOutputPlan ? (
+                  <li>
+                    <span>픽셀 면적</span>
+                    <strong>
+                      {`${editorOutputPlan.areaScalePercent}% 유지 / ${editorOutputPlan.reducedAreaPercent}% 감소`}
+                    </strong>
+                  </li>
+                ) : null}
                 {editorOutputFormat === 'pdf' ? (
                   <li>
                     <span>PDF 페이지</span>

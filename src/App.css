@@ -516,12 +516,51 @@ button:disabled {
   width: 100%;
 }
 
+.optimize-box input[type='number'] {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+  padding: 0 10px;
+  color: var(--ink-strong);
+  font: inherit;
+}
+
 .optimize-box select {
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: color-mix(in oklab, var(--surface) 90%, transparent);
   padding: 0 10px;
+  color: var(--ink-strong);
+}
+
+.resize-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+}
+
+.resize-mode-grid button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+  color: var(--ink-soft);
+  min-height: 36px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.resize-mode-grid button:hover {
+  transform: translateY(-1px);
+}
+
+.resize-mode-grid button.active {
+  border-color: color-mix(in oklab, var(--brand) 62%, var(--line));
+  background: color-mix(in oklab, var(--brand) 22%, transparent);
   color: var(--ink-strong);
 }
 
@@ -671,6 +710,95 @@ button:disabled {
 .action-row button:first-child {
   border-color: color-mix(in oklab, var(--success) 45%, var(--line));
   background: color-mix(in oklab, var(--success) 18%, transparent);
+}
+
+.resize-preview-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.resize-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.resize-preview-head strong {
+  font-size: 0.88rem;
+}
+
+.resize-preview-head span {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.resize-preview-stage {
+  position: relative;
+  width: min(320px, 100%);
+  margin: 0 auto;
+  border: 1px solid color-mix(in oklab, var(--line) 65%, var(--brand));
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--surface) 92%, #f4f7ff);
+}
+
+.resize-source-frame {
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in oklab, var(--ink-soft) 25%, var(--line));
+  pointer-events: none;
+}
+
+.resize-source-sample {
+  position: absolute;
+  border: 1px dashed color-mix(in oklab, var(--warning) 58%, var(--line));
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--warning) 10%, transparent);
+  pointer-events: none;
+}
+
+.resize-output-footprint {
+  position: absolute;
+  border: 1px solid color-mix(in oklab, var(--brand) 62%, var(--line));
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--brand) 24%, transparent);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 4px;
+}
+
+.resize-output-footprint span {
+  color: var(--ink-strong);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.resize-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface) 72%, #0f1f37);
+  overflow: hidden;
+}
+
+.resize-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #4bb4ff, #40deaa);
+}
+
+.resize-preview-caption {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
 }
 
 .pdf-layout-card {

@@ -36,6 +36,8 @@ const DEFAULT_EDITOR_MAX_LONG_EDGE = 1920
 const EDITOR_MIN_CROP_SIZE = 20
 const DEFAULT_EDITOR_PDF_COVERAGE = 92
 const EDITOR_PDF_MIN_MARGIN_MM = 4
+const A4_WIDTH_MM = 210
+const A4_HEIGHT_MM = 297
 
 type ThemeMode = 'dark' | 'light'
 type PageKey = 'tool' | 'editor' | 'about' | 'privacy' | 'contact'
@@ -2332,6 +2334,50 @@ function App() {
     )
   }, [editorOutputSize, editorPdfOrientation])
 
+  const normalizedEditorPdfCoverage = useMemo(
+    () => Math.max(60, Math.min(100, editorPdfCoverage)),
+    [editorPdfCoverage],
+  )
+
+  const editorPdfPreviewLayout = useMemo(() => {
+    if (!editorOutputSize) {
+      return null
+    }
+
+    const pageWidthMm =
+      resolvedEditorPdfOrientation === 'landscape' ? A4_HEIGHT_MM : A4_WIDTH_MM
+    const pageHeightMm =
+      resolvedEditorPdfOrientation === 'landscape' ? A4_WIDTH_MM : A4_HEIGHT_MM
+    const safeWidthMm = Math.max(1, pageWidthMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
+    const safeHeightMm = Math.max(1, pageHeightMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
+    const coverageRatio = normalizedEditorPdfCoverage / 100
+    const printableWidthMm = Math.max(1, safeWidthMm * coverageRatio)
+    const printableHeightMm = Math.max(1, safeHeightMm * coverageRatio)
+    const fitScale = Math.min(
+      printableWidthMm / editorOutputSize.width,
+      printableHeightMm / editorOutputSize.height,
+    )
+    const imageWidthMm = Math.max(1, editorOutputSize.width * fitScale)
+    const imageHeightMm = Math.max(1, editorOutputSize.height * fitScale)
+    const imageX = (pageWidthMm - imageWidthMm) / 2
+    const imageY = (pageHeightMm - imageHeightMm) / 2
+
+    return {
+      pageAspectRatio: `${pageWidthMm} / ${pageHeightMm}`,
+      safeLeftPercent: (EDITOR_PDF_MIN_MARGIN_MM / pageWidthMm) * 100,
+      safeTopPercent: (EDITOR_PDF_MIN_MARGIN_MM / pageHeightMm) * 100,
+      safeWidthPercent: (safeWidthMm / pageWidthMm) * 100,
+      safeHeightPercent: (safeHeightMm / pageHeightMm) * 100,
+      imageLeftPercent: (imageX / pageWidthMm) * 100,
+      imageTopPercent: (imageY / pageHeightMm) * 100,
+      imageWidthPercent: (imageWidthMm / pageWidthMm) * 100,
+      imageHeightPercent: (imageHeightMm / pageHeightMm) * 100,
+      imageAreaPercent:
+        Math.round(((imageWidthMm * imageHeightMm) / (pageWidthMm * pageHeightMm)) * 1000) /
+        10,
+    }
+  }, [editorOutputSize, normalizedEditorPdfCoverage, resolvedEditorPdfOrientation])
+
   const downloadEditedImage = useCallback(async () => {
     const sourceCanvas = editorSourceCanvasRef.current
 
@@ -2409,7 +2455,7 @@ function App() {
         })
         const pageWidthMm = pdf.internal.pageSize.getWidth()
         const pageHeightMm = pdf.internal.pageSize.getHeight()
-        const normalizedCoverage = Math.max(60, Math.min(100, editorPdfCoverage)) / 100
+        const normalizedCoverage = normalizedEditorPdfCoverage / 100
         const safeWidthMm = Math.max(1, pageWidthMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
         const safeHeightMm = Math.max(1, pageHeightMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
         const printableWidthMm = Math.max(1, safeWidthMm * normalizedCoverage)
@@ -2466,7 +2512,7 @@ function App() {
         )
         const outputSummary =
           editorOutputFormat === 'pdf'
-            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${editorPdfCoverage}%)`
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${normalizedEditorPdfCoverage}%)`
             : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${outputSummary}`,
@@ -2474,7 +2520,7 @@ function App() {
       } else {
         const outputSummary =
           editorOutputFormat === 'pdf'
-            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${editorPdfCoverage}%)`
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${normalizedEditorPdfCoverage}%)`
             : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${outputSummary}`,
@@ -2492,11 +2538,11 @@ function App() {
     }
   }, [
     editorImageMeta,
-    editorPdfCoverage,
     editorOutputFormat,
     editorOutputSize,
     resolvedEditorPdfOrientation,
     editorQuality,
+    normalizedEditorPdfCoverage,
     normalizedEditorCrop,
   ])
 
@@ -3433,6 +3479,47 @@ function App() {
               )}
             </div>
 
+            {editorOutputFormat === 'pdf' && editorPdfPreviewLayout ? (
+              <div className="pdf-layout-card">
+                <div className="pdf-layout-head">
+                  <strong>A4 배치 미리보기</strong>
+                  <span>
+                    {`${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} / 채움 ${normalizedEditorPdfCoverage}%`}
+                  </span>
+                </div>
+                <div
+                  className="pdf-page-preview"
+                  style={{ aspectRatio: editorPdfPreviewLayout.pageAspectRatio }}
+                >
+                  <div
+                    className="pdf-safe-zone"
+                    style={{
+                      left: `${editorPdfPreviewLayout.safeLeftPercent}%`,
+                      top: `${editorPdfPreviewLayout.safeTopPercent}%`,
+                      width: `${editorPdfPreviewLayout.safeWidthPercent}%`,
+                      height: `${editorPdfPreviewLayout.safeHeightPercent}%`,
+                    }}
+                  />
+                  <div
+                    className="pdf-image-footprint"
+                    style={{
+                      left: `${editorPdfPreviewLayout.imageLeftPercent}%`,
+                      top: `${editorPdfPreviewLayout.imageTopPercent}%`,
+                      width: `${editorPdfPreviewLayout.imageWidthPercent}%`,
+                      height: `${editorPdfPreviewLayout.imageHeightPercent}%`,
+                    }}
+                  >
+                    <span>
+                      {`${editorOutputSize?.width ?? 0}x${editorOutputSize?.height ?? 0}`}
+                    </span>
+                  </div>
+                </div>
+                <p className="pdf-layout-caption">
+                  {`실제 페이지 점유 면적 약 ${editorPdfPreviewLayout.imageAreaPercent}%`}
+                </p>
+              </div>
+            ) : null}
+
             <div className="action-row">
               <button
                 type="button"
@@ -3497,7 +3584,7 @@ function App() {
                   <li>
                     <span>PDF 페이지</span>
                     <strong>
-                      {`A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${editorPdfCoverage}%)`}
+                      {`A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${normalizedEditorPdfCoverage}%)`}
                     </strong>
                   </li>
                 ) : null}

@@ -642,6 +642,78 @@ button:disabled {
   background: color-mix(in oklab, var(--success) 18%, transparent);
 }
 
+.pdf-layout-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.pdf-layout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pdf-layout-head strong {
+  font-size: 0.88rem;
+}
+
+.pdf-layout-head span {
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.pdf-page-preview {
+  position: relative;
+  width: min(230px, 100%);
+  margin: 0 auto;
+  border: 1px solid color-mix(in oklab, var(--line) 70%, var(--brand));
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--surface) 94%, #fff),
+      color-mix(in oklab, var(--surface) 84%, #f2f7ff)
+    );
+}
+
+.pdf-safe-zone {
+  position: absolute;
+  border: 1px dashed color-mix(in oklab, var(--brand) 45%, var(--line));
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+.pdf-image-footprint {
+  position: absolute;
+  border: 1px solid color-mix(in oklab, var(--brand) 62%, var(--line));
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--brand) 24%, transparent);
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  text-align: center;
+}
+
+.pdf-image-footprint span {
+  color: var(--ink-strong);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pdf-layout-caption {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
 .download-assist {
   border: 1px solid var(--line);
   border-radius: 10px;

@@ -1,14 +1,41 @@
 :root {
-  --bg-base: #f4efe8;
-  --bg-accent: #dfebe4;
-  --ink-strong: #1e2a33;
-  --ink-soft: #465764;
-  --surface: rgba(255, 255, 255, 0.78);
-  --surface-strong: rgba(255, 255, 255, 0.9);
-  --line: rgba(34, 48, 57, 0.15);
-  --brand: #0f8f73;
-  --brand-strong: #0c7560;
-  --warning: #cc5142;
+  --bg-base: #0a1226;
+  --bg-accent: #111f3f;
+  --sidebar: #182746;
+  --sidebar-strong: #101d37;
+  --topbar: rgba(9, 18, 38, 0.86);
+  --surface: #1b2a49;
+  --surface-soft: rgba(28, 44, 75, 0.88);
+  --surface-strong: #22345a;
+  --line: rgba(146, 171, 214, 0.23);
+  --ink-strong: #f3f7ff;
+  --ink-soft: #9eb3d9;
+  --brand: #3f84ff;
+  --brand-strong: #72b2ff;
+  --success: #24c98d;
+  --warning: #f18b36;
+  --danger: #ff6b63;
+  --shadow-heavy: 0 18px 40px rgba(3, 10, 24, 0.42);
+}
+
+:root[data-theme='light'] {
+  --bg-base: #f2f7ff;
+  --bg-accent: #dfe9fb;
+  --sidebar: #f4f8ff;
+  --sidebar-strong: #e9f1ff;
+  --topbar: rgba(246, 250, 255, 0.94);
+  --surface: #ffffff;
+  --surface-soft: rgba(255, 255, 255, 0.96);
+  --surface-strong: #f5f8ff;
+  --line: rgba(72, 102, 153, 0.2);
+  --ink-strong: #11203c;
+  --ink-soft: #4b628b;
+  --brand: #2f6df6;
+  --brand-strong: #1549b8;
+  --success: #169568;
+  --warning: #cd6e23;
+  --danger: #c34b45;
+  --shadow-heavy: 0 14px 30px rgba(39, 63, 111, 0.15);
 }
 
 * {
@@ -21,20 +48,21 @@ body {
   min-height: 100vh;
   font-family:
     'Avenir Next',
-    'Segoe UI',
+    'Trebuchet MS',
     'Apple SD Gothic Neo',
     'Noto Sans KR',
     sans-serif;
   color: var(--ink-strong);
   background:
-    radial-gradient(circle at 15% 10%, rgba(15, 143, 115, 0.15), transparent 48%),
-    radial-gradient(circle at 85% 0%, rgba(81, 125, 156, 0.22), transparent 45%),
+    radial-gradient(circle at 12% 8%, rgba(63, 132, 255, 0.24), transparent 45%),
+    radial-gradient(circle at 88% 3%, rgba(39, 201, 143, 0.17), transparent 38%),
     linear-gradient(160deg, var(--bg-base), var(--bg-accent));
+  transition: background 220ms ease, color 220ms ease;
 }
 
 #root {
   min-height: 100vh;
-  padding: clamp(16px, 2.6vw, 28px);
+  padding: clamp(12px, 2vw, 20px);
 }
 
 button,

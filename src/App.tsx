@@ -23,7 +23,10 @@ const ENABLE_PLATE_DETECTION = false
 const FACE_WARMUP_TIMEOUT_MS = 25_000
 const PLATE_WARMUP_TIMEOUT_MS = 35_000
 const PLATE_DETECTION_TIMEOUT_MS = 20_000
+const THEME_STORAGE_KEY = 'face_masker_theme_v1'
 
+type ThemeMode = 'dark' | 'light'
+type PageKey = 'tool' | 'about' | 'privacy' | 'contact'
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
 
 interface BatchResult {
@@ -49,6 +52,28 @@ interface ExportResult {
   width: number
   height: number
 }
+
+function parsePageFromHash(hash: string): PageKey {
+  const normalized = hash.replace(/^#/, '')
+
+  if (
+    normalized === 'tool' ||
+    normalized === 'about' ||
+    normalized === 'privacy' ||
+    normalized === 'contact'
+  ) {
+    return normalized
+  }
+
+  return 'tool'
+}
+
+const PAGE_ITEMS: Array<{ key: PageKey; label: string; icon: string }> = [
+  { key: 'tool', label: '자동 가림 툴', icon: '🧩' },
+  { key: 'about', label: '사이트 소개', icon: '📘' },
+  { key: 'privacy', label: '개인정보처리방침', icon: '🛡️' },
+  { key: 'contact', label: '문의하기', icon: '✉️' },
+]
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -275,6 +300,29 @@ function App() {
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const idSequenceRef = useRef(1)
 
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (typeof window === 'undefined') {
+      return 'dark'
+    }
+
+    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY)
+
+    if (storedTheme === 'dark' || storedTheme === 'light') {
+      return storedTheme
+    }
+
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light'
+  })
+  const [activePage, setActivePage] = useState<PageKey>(() => {
+    if (typeof window === 'undefined') {
+      return 'tool'
+    }
+
+    return parsePageFromHash(window.location.hash)
+  })
+
   const [isPrepared, setIsPrepared] = useState(false)
   const [isPreparing, setIsPreparing] = useState(false)
   const [hasCachedEngines, setHasCachedEngines] = useState(false)
@@ -308,6 +356,49 @@ function App() {
 
   const canUseShareSheet =
     typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode)
+    document.documentElement.dataset.theme = themeMode
+  }, [themeMode])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const onHashChange = () => {
+      setActivePage(parsePageFromHash(window.location.hash))
+    }
+
+    window.addEventListener('hashchange', onHashChange)
+
+    return () => {
+      window.removeEventListener('hashchange', onHashChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const nextHash = activePage === 'tool' ? '' : `#${activePage}`
+    const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`
+    window.history.replaceState(null, '', nextUrl)
+  }, [activePage])
+
+  const toggleThemeMode = useCallback(() => {
+    setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))
+  }, [])
+
+  const goToPage = useCallback((page: PageKey) => {
+    setActivePage(page)
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1113,386 +1204,503 @@ function App() {
 
   const hasImage = Boolean(imageMeta)
 
-  if (!isPrepared) {
+  const currentPageTitle = useMemo(() => {
+    if (activePage === 'tool') {
+      return '자동 가림 툴'
+    }
+
+    if (activePage === 'about') {
+      return '사이트 소개'
+    }
+
+    if (activePage === 'privacy') {
+      return '개인정보처리방침'
+    }
+
+    return '문의하기'
+  }, [activePage])
+
+  const renderToolPage = () => {
+    if (!isPrepared) {
+      return (
+        <section className="app-shell intro-shell">
+          <section className="hero intro-hero">
+            <p className="eyebrow">모바일 우선 익명화 툴</p>
+            <h1>변환 전 데이터 안내</h1>
+            <p className="hero-description">
+              {ENABLE_PLATE_DETECTION
+                ? '기능 시작 시 얼굴/번호판 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'
+                : '기능 시작 시 얼굴 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다. 번호판 기능은 임시 보류 상태입니다.'}
+            </p>
+          </section>
+
+          <section className="consent-card">
+            <p className="consent-title">기능 사용 전 확인</p>
+            <ul className="consent-list">
+              <li>최초 1회 데이터 사용량: 약 6~25MB</li>
+              <li>엔진 다운로드 후: 같은 브라우저에서 추가 다운로드 없음</li>
+              <li>사진 자체는 서버 업로드 없이 기기 내에서 처리</li>
+              <li>기본 출력은 JPG + 크기 최적화(품질 82%, 긴 변 1920px)</li>
+            </ul>
+
+            <div className="consent-note">{preparationMessage}</div>
+
+            {hasCachedEngines && (
+              <p className="consent-chip">
+                이 브라우저는 이전에 엔진을 내려받았습니다. 대부분 즉시 시작됩니다.
+              </p>
+            )}
+
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => {
+                void prepareTransformer()
+              }}
+              disabled={isPreparing}
+            >
+              {isPreparing ? '엔진 준비 중...' : '변환하러가기'}
+            </button>
+          </section>
+        </section>
+      )
+    }
+
     return (
-      <main className="app-shell intro-shell">
-        <section className="hero intro-hero">
-          <p className="eyebrow">모바일 우선 익명화 툴</p>
-          <h1>변환 전 데이터 안내</h1>
+      <div className="app-shell">
+        <section className="hero">
+          <p className="eyebrow">브라우저 로컬 처리</p>
+          <h1>업로드 전에 10초 익명화</h1>
           <p className="hero-description">
             {ENABLE_PLATE_DETECTION
-              ? '기능 시작 시 얼굴/번호판 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'
-              : '기능 시작 시 얼굴 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다. 번호판 기능은 임시 보류 상태입니다.'}
+              ? '얼굴과 번호판을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다.'
+              : '얼굴을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다. 번호판 기능은 임시 보류 상태입니다.'}
           </p>
         </section>
 
-        <section className="consent-card">
-          <p className="consent-title">기능 사용 전 확인</p>
-          <ul className="consent-list">
-            <li>최초 1회 데이터 사용량: 약 6~25MB</li>
-            <li>엔진 다운로드 후: 같은 브라우저에서 추가 다운로드 없음</li>
-            <li>사진 자체는 서버 업로드 없이 기기 내에서 처리</li>
-            <li>기본 출력은 JPG + 크기 최적화(품질 82%, 긴 변 1920px)</li>
-          </ul>
-
-          <div className="consent-note">{preparationMessage}</div>
-
-          {hasCachedEngines && (
-            <p className="consent-chip">
-              이 브라우저는 이전에 엔진을 내려받았습니다. 대부분 즉시 시작됩니다.
-            </p>
-          )}
-
-          <button
-            type="button"
-            className="primary-btn"
-            onClick={() => {
-              void prepareTransformer()
-            }}
-            disabled={isPreparing}
-          >
-            {isPreparing ? '엔진 준비 중...' : '변환하러가기'}
-          </button>
+        <section className="cache-assurance">
+          {!ENABLE_PLATE_DETECTION
+            ? '얼굴 엔진 준비가 끝났습니다. 번호판 기능은 임시 보류 상태이며 얼굴 중심 모드로 동작합니다.'
+            : isPlateDetectorReady
+              ? '엔진 준비가 끝났습니다. 같은 브라우저에서는 추가 다운로드 없이 안심하고 변환할 수 있습니다. 기본 출력은 데이터 절약 JPG 설정이 적용됩니다.'
+              : isPlateDetectorWarming
+                ? '얼굴 엔진 준비가 끝났습니다. 번호판 엔진은 백그라운드에서 준비 중이며 준비 전에는 얼굴 중심 모드로 동작합니다.'
+                : isPlateDetectorFailed
+                  ? '얼굴 엔진 준비가 끝났습니다. 번호판 엔진 준비에 실패해 얼굴 중심 모드로 동작합니다.'
+                  : '얼굴 엔진 준비가 끝났습니다. 번호판 엔진은 곧 백그라운드에서 준비됩니다.'}
         </section>
-      </main>
+
+        <section className="controls">
+          <div className="dropzone-wrapper">
+            <label
+              className={`dropzone ${isDragging ? 'dragging' : ''}`}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setIsDragging(true)
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={onDrop}
+            >
+              <input
+                type="file"
+                accept="image/*"
+                onChange={onPickFile}
+                className="file-input"
+              />
+              <span className="dropzone-title">사진 드래그 또는 클릭 업로드</span>
+              <span className="dropzone-subtitle">
+                2장 이상 드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다.
+              </span>
+            </label>
+
+            <input
+              ref={batchInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={onPickBatchFiles}
+              className="file-input"
+            />
+
+            <div className="toolbar">
+              <button
+                type="button"
+                onClick={() => {
+                  void runAutoScan()
+                }}
+                disabled={!hasImage || isScanning || isBatchProcessing}
+              >
+                {isScanning ? '스캔 중...' : '자동 스캔 다시 실행'}
+              </button>
+              <button
+                type="button"
+                className={drawModeEnabled ? 'active' : ''}
+                disabled={!hasImage || isBatchProcessing}
+                onClick={() => {
+                  setDrawModeEnabled((prev) => !prev)
+                  setDraftRect(null)
+                }}
+              >
+                {drawModeEnabled ? '수동 박스 모드 종료' : '수동 박스 추가'}
+              </button>
+              <button
+                type="button"
+                disabled={!hasImage || regions.length === 0 || isBatchProcessing}
+                onClick={() => setRegions([])}
+              >
+                박스 전체 삭제
+              </button>
+              <button
+                type="button"
+                disabled={isBatchProcessing}
+                onClick={() => batchInputRef.current?.click()}
+              >
+                {isBatchProcessing ? '일괄 처리 중...' : '여러 장 ZIP 일괄 처리'}
+              </button>
+            </div>
+          </div>
+
+          <div className="picker-row">
+            <div className="picker-group">
+              <span className="picker-label">마스킹 스타일</span>
+              <div className="segmented">
+                {(['mosaic', 'blur', 'black'] as const).map((style) => (
+                  <button
+                    key={style}
+                    type="button"
+                    className={maskStyle === style ? 'active' : ''}
+                    onClick={() => setMaskStyle(style)}
+                    disabled={isBatchProcessing}
+                  >
+                    {style === 'mosaic' ? '모자이크' : style === 'blur' ? '블러' : '검은 박스'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="picker-group">
+              <span className="picker-label">미리보기</span>
+              <div className="segmented segmented-two">
+                {(['masked', 'original'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={previewMode === mode ? 'active' : ''}
+                    onClick={() => setPreviewMode(mode)}
+                    disabled={!hasImage || isBatchProcessing}
+                  >
+                    {mode === 'masked' ? '가림본' : '원본'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="picker-group">
+              <span className="picker-label">데이터 절약(기본값 ON)</span>
+              <div className="optimize-box">
+                <label className="optimize-toggle">
+                  <input
+                    type="checkbox"
+                    checked={optimizeData}
+                    onChange={(event) => setOptimizeData(event.target.checked)}
+                    disabled={isBatchProcessing}
+                  />
+                  <span>용량 절약 모드 사용</span>
+                </label>
+
+                <label className="optimize-field">
+                  JPG 품질
+                  <strong>{Math.round(jpegQuality * 100)}%</strong>
+                </label>
+                <input
+                  type="range"
+                  min={60}
+                  max={92}
+                  step={1}
+                  value={Math.round(jpegQuality * 100)}
+                  onChange={(event) =>
+                    setJpegQuality(Number(event.target.value) / 100)
+                  }
+                  disabled={!optimizeData || isBatchProcessing}
+                />
+
+                <label className="optimize-field">
+                  최대 긴 변
+                  <strong>{maxLongEdge}px</strong>
+                </label>
+                <select
+                  value={maxLongEdge}
+                  onChange={(event) => setMaxLongEdge(Number(event.target.value))}
+                  disabled={!optimizeData || isBatchProcessing}
+                >
+                  <option value={1280}>1280px (초절약)</option>
+                  <option value={1600}>1600px</option>
+                  <option value={1920}>1920px (권장)</option>
+                  <option value={2560}>2560px</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="workspace">
+          <div className="canvas-panel">
+            <div
+              className="canvas-stage"
+              style={
+                imageMeta
+                  ? { aspectRatio: `${imageMeta.width} / ${imageMeta.height}` }
+                  : undefined
+              }
+            >
+              {imageMeta ? (
+                <>
+                  <canvas ref={canvasRef} className="preview-canvas" />
+                  <svg
+                    ref={overlayRef}
+                    className={`overlay ${drawModeEnabled ? 'draw-mode' : ''}`}
+                    viewBox={`0 0 ${imageMeta.width} ${imageMeta.height}`}
+                    preserveAspectRatio="none"
+                    onPointerDown={onOverlayPointerDown}
+                    onPointerMove={onOverlayPointerMove}
+                    onPointerUp={onOverlayPointerUp}
+                    onPointerCancel={() => {
+                      dragStartRef.current = null
+                      setDraftRect(null)
+                    }}
+                  >
+                    {regions.map((region, index) => (
+                      <g
+                        key={region.id}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (!drawModeEnabled) {
+                            toggleRegion(region.id)
+                          }
+                        }}
+                      >
+                        <rect
+                          x={region.x}
+                          y={region.y}
+                          width={region.width}
+                          height={region.height}
+                          className={`region-box ${region.kind} ${
+                            region.active ? 'active' : 'inactive'
+                          }`}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <text
+                          x={region.x + 4}
+                          y={Math.max(12, region.y - 4)}
+                          className="region-index"
+                        >
+                          {index + 1}
+                        </text>
+                      </g>
+                    ))}
+
+                    {draftRect && (
+                      <rect
+                        x={draftRect.x}
+                        y={draftRect.y}
+                        width={draftRect.width}
+                        height={draftRect.height}
+                        className="region-box draft"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    )}
+                  </svg>
+                </>
+              ) : (
+                <div className="empty-state">이미지를 올리면 결과가 여기에 표시됩니다.</div>
+              )}
+            </div>
+
+            <div className="action-row">
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadMaskedImage()
+                }}
+                disabled={!hasImage}
+              >
+                가려진 JPG 다운로드
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void shareMaskedImage()
+                }}
+                disabled={!hasImage || !canUseShareSheet}
+              >
+                공유
+              </button>
+            </div>
+          </div>
+
+          <aside className="region-panel">
+            <div className="panel-header">
+              <h2>검출 결과</h2>
+              <p>
+                전체 {regions.length}개 / 적용 {activeCount}개
+              </p>
+            </div>
+
+            <div className="status-box">{statusMessage}</div>
+
+            {batchTotalCount > 0 && (
+              <section className="batch-box">
+                <div className="batch-header">
+                  <h3>일괄 처리 로그</h3>
+                  <p>
+                    완료 {batchFinishedCount}/{batchTotalCount} · 성공 {batchSuccessCount} ·
+                    실패 {batchFailedCount}
+                  </p>
+                </div>
+                <ul className="batch-list">
+                  {batchResults.map((item) => (
+                    <li key={item.id} className={`batch-item ${item.status}`}>
+                      <div className="batch-item-name">{item.fileName}</div>
+                      <div className="batch-item-meta">
+                        {item.status === 'pending' && '대기 중'}
+                        {item.status === 'processing' && '처리 중...'}
+                        {item.status === 'done' &&
+                          (ENABLE_PLATE_DETECTION
+                            ? `얼굴 ${item.faceCount} / 번호판 ${item.plateCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`
+                            : `얼굴 ${item.faceCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`)}
+                        {item.status === 'failed' &&
+                          `실패: ${item.errorMessage ?? '알 수 없는 오류'}`}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {regions.length > 0 ? (
+              <ul className="region-list">
+                {regions.map((region, index) => (
+                  <li key={region.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={region.active}
+                        onChange={() => toggleRegion(region.id)}
+                      />
+                      <span>
+                        #{index + 1} {prettyKind(region.kind)}
+                      </span>
+                    </label>
+                    <button type="button" onClick={() => removeRegion(region.id)}>
+                      삭제
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="panel-empty">
+                자동 스캔 결과가 없으면 수동 박스로 추가해 주세요.
+              </p>
+            )}
+          </aside>
+        </section>
+      </div>
+    )
+  }
+
+  const renderInformationPage = () => {
+    if (activePage === 'about') {
+      return (
+        <section className="page-card">
+          <p className="page-kicker">About</p>
+          <h2>모두가 쉽게 쓰는 무료 오픈 툴을 만들고 있습니다.</h2>
+          <p>
+            이 사이트는 어려운 설치 과정 없이 누구나 사진을 간편하게 가릴 수 있도록 만든
+            무료 오픈 웹 툴입니다. 복잡한 지식이 없어도 업로드 후 바로 익명화 작업을 시작할
+            수 있도록 설계했습니다.
+          </p>
+          <p>
+            운영자는 더 많은 사람이 부담 없이 개인정보 보호 도구를 사용할 수 있기를 바라며,
+            접근성과 편의성을 우선으로 기능을 계속 개선하고 있습니다.
+          </p>
+        </section>
+      )
+    }
+
+    if (activePage === 'privacy') {
+      return (
+        <section className="page-card">
+          <p className="page-kicker">Privacy Policy</p>
+          <h2>개인정보처리방침</h2>
+          <p>
+            본 서비스는 사용자의 사진과 개인정보를 서버에 저장하거나 관리하지 않는 것을
+            기본 원칙으로 합니다.
+          </p>
+          <ul className="page-list">
+            <li>업로드한 이미지는 브라우저(기기) 내부에서만 처리됩니다.</li>
+            <li>회원가입, 로그인, 이름/연락처 수집 기능이 없습니다.</li>
+            <li>이미지 파일은 처리 후 자동으로 사용자 환경에서만 남거나 삭제됩니다.</li>
+            <li>운영자는 사용자의 이미지 원본/결과물을 별도로 보관하지 않습니다.</li>
+            <li>문의 메일을 보낸 경우, 회신 목적 범위에서만 최소한의 정보가 사용됩니다.</li>
+          </ul>
+          <p>
+            따라서 사용자는 별도 계정 생성 없이 안심하고 익명화 기능을 이용할 수 있습니다.
+          </p>
+        </section>
+      )
+    }
+
+    return (
+      <section className="page-card">
+        <p className="page-kicker">Contact</p>
+        <h2>문의하기</h2>
+        <p>기능 제안, 버그 제보, 협업 문의는 아래 이메일로 보내주세요.</p>
+        <a className="contact-link" href="mailto:andreabyfive@gmail.com">
+          andreabyfive@gmail.com
+        </a>
+      </section>
     )
   }
 
   return (
-    <main className="app-shell">
-      <section className="hero">
-        <p className="eyebrow">브라우저 로컬 처리</p>
-        <h1>업로드 전에 10초 익명화</h1>
-        <p className="hero-description">
-          {ENABLE_PLATE_DETECTION
-            ? '얼굴과 번호판을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다.'
-            : '얼굴을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다. 번호판 기능은 임시 보류 상태입니다.'}
-        </p>
-      </section>
-
-      <section className="cache-assurance">
-        {!ENABLE_PLATE_DETECTION
-          ? '얼굴 엔진 준비가 끝났습니다. 번호판 기능은 임시 보류 상태이며 얼굴 중심 모드로 동작합니다.'
-          : isPlateDetectorReady
-          ? '엔진 준비가 끝났습니다. 같은 브라우저에서는 추가 다운로드 없이 안심하고 변환할 수 있습니다. 기본 출력은 데이터 절약 JPG 설정이 적용됩니다.'
-          : isPlateDetectorWarming
-            ? '얼굴 엔진 준비가 끝났습니다. 번호판 엔진은 백그라운드에서 준비 중이며 준비 전에는 얼굴 중심 모드로 동작합니다.'
-            : isPlateDetectorFailed
-              ? '얼굴 엔진 준비가 끝났습니다. 번호판 엔진 준비에 실패해 얼굴 중심 모드로 동작합니다.'
-              : '얼굴 엔진 준비가 끝났습니다. 번호판 엔진은 곧 백그라운드에서 준비됩니다.'}
-      </section>
-
-      <section className="controls">
-        <div className="dropzone-wrapper">
-          <label
-            className={`dropzone ${isDragging ? 'dragging' : ''}`}
-            onDragOver={(event) => {
-              event.preventDefault()
-              setIsDragging(true)
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={onDrop}
-          >
-            <input
-              type="file"
-              accept="image/*"
-              onChange={onPickFile}
-              className="file-input"
-            />
-            <span className="dropzone-title">사진 드래그 또는 클릭 업로드</span>
-            <span className="dropzone-subtitle">
-              2장 이상 드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다.
-            </span>
-          </label>
-
-          <input
-            ref={batchInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={onPickBatchFiles}
-            className="file-input"
-          />
-
-          <div className="toolbar">
-            <button
-              type="button"
-              onClick={() => {
-                void runAutoScan()
-              }}
-              disabled={!hasImage || isScanning || isBatchProcessing}
-            >
-              {isScanning ? '스캔 중...' : '자동 스캔 다시 실행'}
-            </button>
-            <button
-              type="button"
-              className={drawModeEnabled ? 'active' : ''}
-              disabled={!hasImage || isBatchProcessing}
-              onClick={() => {
-                setDrawModeEnabled((prev) => !prev)
-                setDraftRect(null)
-              }}
-            >
-              {drawModeEnabled ? '수동 박스 모드 종료' : '수동 박스 추가'}
-            </button>
-            <button
-              type="button"
-              disabled={!hasImage || regions.length === 0 || isBatchProcessing}
-              onClick={() => setRegions([])}
-            >
-              박스 전체 삭제
-            </button>
-            <button
-              type="button"
-              disabled={isBatchProcessing}
-              onClick={() => batchInputRef.current?.click()}
-            >
-              {isBatchProcessing ? '일괄 처리 중...' : '여러 장 ZIP 일괄 처리'}
-            </button>
-          </div>
+    <main className="dashboard-shell">
+      <aside className="dashboard-sidebar">
+        <div className="sidebar-brand">
+          <p className="sidebar-eyebrow">Open Tool</p>
+          <h2>FaceDetector Web</h2>
         </div>
 
-        <div className="picker-row">
-          <div className="picker-group">
-            <span className="picker-label">마스킹 스타일</span>
-            <div className="segmented">
-              {(['mosaic', 'blur', 'black'] as const).map((style) => (
-                <button
-                  key={style}
-                  type="button"
-                  className={maskStyle === style ? 'active' : ''}
-                  onClick={() => setMaskStyle(style)}
-                  disabled={isBatchProcessing}
-                >
-                  {style === 'mosaic' ? '모자이크' : style === 'blur' ? '블러' : '검은 박스'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="picker-group">
-            <span className="picker-label">미리보기</span>
-            <div className="segmented segmented-two">
-              {(['masked', 'original'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={previewMode === mode ? 'active' : ''}
-                  onClick={() => setPreviewMode(mode)}
-                  disabled={!hasImage || isBatchProcessing}
-                >
-                  {mode === 'masked' ? '가림본' : '원본'}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="picker-group">
-            <span className="picker-label">데이터 절약(기본값 ON)</span>
-            <div className="optimize-box">
-              <label className="optimize-toggle">
-                <input
-                  type="checkbox"
-                  checked={optimizeData}
-                  onChange={(event) => setOptimizeData(event.target.checked)}
-                  disabled={isBatchProcessing}
-                />
-                <span>용량 절약 모드 사용</span>
-              </label>
-
-              <label className="optimize-field">
-                JPG 품질
-                <strong>{Math.round(jpegQuality * 100)}%</strong>
-              </label>
-              <input
-                type="range"
-                min={60}
-                max={92}
-                step={1}
-                value={Math.round(jpegQuality * 100)}
-                onChange={(event) =>
-                  setJpegQuality(Number(event.target.value) / 100)
-                }
-                disabled={!optimizeData || isBatchProcessing}
-              />
-
-              <label className="optimize-field">
-                최대 긴 변
-                <strong>{maxLongEdge}px</strong>
-              </label>
-              <select
-                value={maxLongEdge}
-                onChange={(event) => setMaxLongEdge(Number(event.target.value))}
-                disabled={!optimizeData || isBatchProcessing}
-              >
-                <option value={1280}>1280px (초절약)</option>
-                <option value={1600}>1600px</option>
-                <option value={1920}>1920px (권장)</option>
-                <option value={2560}>2560px</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="workspace">
-        <div className="canvas-panel">
-          <div
-            className="canvas-stage"
-            style={
-              imageMeta
-                ? { aspectRatio: `${imageMeta.width} / ${imageMeta.height}` }
-                : undefined
-            }
-          >
-            {imageMeta ? (
-              <>
-                <canvas ref={canvasRef} className="preview-canvas" />
-                <svg
-                  ref={overlayRef}
-                  className={`overlay ${drawModeEnabled ? 'draw-mode' : ''}`}
-                  viewBox={`0 0 ${imageMeta.width} ${imageMeta.height}`}
-                  preserveAspectRatio="none"
-                  onPointerDown={onOverlayPointerDown}
-                  onPointerMove={onOverlayPointerMove}
-                  onPointerUp={onOverlayPointerUp}
-                  onPointerCancel={() => {
-                    dragStartRef.current = null
-                    setDraftRect(null)
-                  }}
-                >
-                  {regions.map((region, index) => (
-                    <g
-                      key={region.id}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        if (!drawModeEnabled) {
-                          toggleRegion(region.id)
-                        }
-                      }}
-                    >
-                      <rect
-                        x={region.x}
-                        y={region.y}
-                        width={region.width}
-                        height={region.height}
-                        className={`region-box ${region.kind} ${
-                          region.active ? 'active' : 'inactive'
-                        }`}
-                        vectorEffect="non-scaling-stroke"
-                      />
-                      <text
-                        x={region.x + 4}
-                        y={Math.max(12, region.y - 4)}
-                        className="region-index"
-                      >
-                        {index + 1}
-                      </text>
-                    </g>
-                  ))}
-
-                  {draftRect && (
-                    <rect
-                      x={draftRect.x}
-                      y={draftRect.y}
-                      width={draftRect.width}
-                      height={draftRect.height}
-                      className="region-box draft"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  )}
-                </svg>
-              </>
-            ) : (
-              <div className="empty-state">이미지를 올리면 결과가 여기에 표시됩니다.</div>
-            )}
-          </div>
-
-          <div className="action-row">
+        <nav className="sidebar-nav">
+          {PAGE_ITEMS.map((item) => (
             <button
+              key={item.key}
               type="button"
-              onClick={() => {
-                void downloadMaskedImage()
-              }}
-              disabled={!hasImage}
+              className={`sidebar-nav-item ${activePage === item.key ? 'active' : ''}`}
+              onClick={() => goToPage(item.key)}
             >
-              가려진 JPG 다운로드
+              <span className="nav-icon">{item.icon}</span>
+              <span>{item.label}</span>
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                void shareMaskedImage()
-              }}
-              disabled={!hasImage || !canUseShareSheet}
-            >
-              공유
-            </button>
+          ))}
+        </nav>
+
+        <p className="sidebar-footnote">누구나 무료로 쓸 수 있는 익명화 도구</p>
+      </aside>
+
+      <section className="dashboard-main">
+        <header className="dashboard-topbar">
+          <div>
+            <p className="topbar-eyebrow">Personal Privacy Toolkit</p>
+            <h1>{currentPageTitle}</h1>
           </div>
+          <button type="button" className="theme-toggle" onClick={toggleThemeMode}>
+            {themeMode === 'dark' ? '☀ 주간 모드' : '🌙 야간 모드'}
+          </button>
+        </header>
+
+        <div className="dashboard-content">
+          {activePage === 'tool' ? renderToolPage() : renderInformationPage()}
         </div>
-
-        <aside className="region-panel">
-          <div className="panel-header">
-            <h2>검출 결과</h2>
-            <p>
-              전체 {regions.length}개 / 적용 {activeCount}개
-            </p>
-          </div>
-
-          <div className="status-box">{statusMessage}</div>
-
-          {batchTotalCount > 0 && (
-            <section className="batch-box">
-              <div className="batch-header">
-                <h3>일괄 처리 로그</h3>
-                <p>
-                  완료 {batchFinishedCount}/{batchTotalCount} · 성공 {batchSuccessCount} ·
-                  실패 {batchFailedCount}
-                </p>
-              </div>
-              <ul className="batch-list">
-                {batchResults.map((item) => (
-                  <li key={item.id} className={`batch-item ${item.status}`}>
-                    <div className="batch-item-name">{item.fileName}</div>
-                    <div className="batch-item-meta">
-                      {item.status === 'pending' && '대기 중'}
-                      {item.status === 'processing' && '처리 중...'}
-                      {item.status === 'done' &&
-                        (ENABLE_PLATE_DETECTION
-                          ? `얼굴 ${item.faceCount} / 번호판 ${item.plateCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`
-                          : `얼굴 ${item.faceCount} · ${item.outputWidth ?? '-'}x${item.outputHeight ?? '-'} · ${item.outputBytes ? formatBytes(item.outputBytes) : '-'}`)}
-                      {item.status === 'failed' &&
-                        `실패: ${item.errorMessage ?? '알 수 없는 오류'}`}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {regions.length > 0 ? (
-            <ul className="region-list">
-              {regions.map((region, index) => (
-                <li key={region.id}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={region.active}
-                      onChange={() => toggleRegion(region.id)}
-                    />
-                    <span>
-                      #{index + 1} {prettyKind(region.kind)}
-                    </span>
-                  </label>
-                  <button type="button" onClick={() => removeRegion(region.id)}>
-                    삭제
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="panel-empty">자동 스캔 결과가 없으면 수동 박스로 추가해 주세요.</p>
-          )}
-        </aside>
       </section>
     </main>
   )

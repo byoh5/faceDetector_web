@@ -525,6 +525,37 @@ button:disabled {
   color: var(--ink-strong);
 }
 
+.pdf-position-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pdf-position-grid button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+  color: var(--ink-soft);
+  min-height: 36px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.95rem;
+  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.pdf-position-grid button:hover {
+  transform: translateY(-1px);
+}
+
+.pdf-position-grid button.active {
+  border-color: color-mix(in oklab, var(--brand) 62%, var(--line));
+  background: color-mix(in oklab, var(--brand) 22%, transparent);
+  color: var(--ink-strong);
+}
+
 .workspace {
   padding: 12px;
   display: grid;
@@ -687,6 +718,14 @@ button:disabled {
   position: absolute;
   border: 1px dashed color-mix(in oklab, var(--brand) 45%, var(--line));
   border-radius: 5px;
+  pointer-events: none;
+}
+
+.pdf-placement-zone {
+  position: absolute;
+  border: 1px dashed color-mix(in oklab, var(--warning) 58%, var(--line));
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--warning) 8%, transparent);
   pointer-events: none;
 }
 

@@ -44,6 +44,16 @@ type PageKey = 'tool' | 'editor' | 'about' | 'privacy' | 'contact'
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
 type EditorOutputFormat = 'jpeg' | 'png' | 'webp' | 'pdf'
 type EditorPdfOrientation = 'auto' | 'portrait' | 'landscape'
+type EditorPdfPlacement =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'middle-left'
+  | 'center'
+  | 'middle-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right'
 type BrowserFamily =
   | 'chrome'
   | 'edge'
@@ -51,6 +61,22 @@ type BrowserFamily =
   | 'safari'
   | 'samsung'
   | 'other'
+
+const EDITOR_PDF_PLACEMENT_OPTIONS: Array<{
+  value: EditorPdfPlacement
+  label: string
+  symbol: string
+}> = [
+  { value: 'top-left', label: '좌상단', symbol: '↖' },
+  { value: 'top-center', label: '상단 중앙', symbol: '↑' },
+  { value: 'top-right', label: '우상단', symbol: '↗' },
+  { value: 'middle-left', label: '좌측 중앙', symbol: '←' },
+  { value: 'center', label: '정중앙', symbol: '●' },
+  { value: 'middle-right', label: '우측 중앙', symbol: '→' },
+  { value: 'bottom-left', label: '좌하단', symbol: '↙' },
+  { value: 'bottom-center', label: '하단 중앙', symbol: '↓' },
+  { value: 'bottom-right', label: '우하단', symbol: '↘' },
+]
 
 interface BatchResult {
   id: string
@@ -420,6 +446,50 @@ function getEditorPdfOrientationLabel(
   return '자동'
 }
 
+function getEditorPdfPlacementLabel(placement: EditorPdfPlacement): string {
+  const option = EDITOR_PDF_PLACEMENT_OPTIONS.find((item) => item.value === placement)
+  return option?.label ?? '정중앙'
+}
+
+function getEditorPdfPlacementFactors(placement: EditorPdfPlacement): {
+  xFactor: number
+  yFactor: number
+} {
+  if (placement === 'top-left') {
+    return { xFactor: 0, yFactor: 0 }
+  }
+
+  if (placement === 'top-center') {
+    return { xFactor: 0.5, yFactor: 0 }
+  }
+
+  if (placement === 'top-right') {
+    return { xFactor: 1, yFactor: 0 }
+  }
+
+  if (placement === 'middle-left') {
+    return { xFactor: 0, yFactor: 0.5 }
+  }
+
+  if (placement === 'middle-right') {
+    return { xFactor: 1, yFactor: 0.5 }
+  }
+
+  if (placement === 'bottom-left') {
+    return { xFactor: 0, yFactor: 1 }
+  }
+
+  if (placement === 'bottom-center') {
+    return { xFactor: 0.5, yFactor: 1 }
+  }
+
+  if (placement === 'bottom-right') {
+    return { xFactor: 1, yFactor: 1 }
+  }
+
+  return { xFactor: 0.5, yFactor: 0.5 }
+}
+
 function sanitizeCropRect(
   rect: DetectionRect,
   maxWidth: number,
@@ -765,6 +835,8 @@ function App() {
     useState<EditorOutputFormat>('jpeg')
   const [editorPdfOrientation, setEditorPdfOrientation] =
     useState<EditorPdfOrientation>('auto')
+  const [editorPdfPlacement, setEditorPdfPlacement] =
+    useState<EditorPdfPlacement>('center')
   const [editorPdfCoverage, setEditorPdfCoverage] = useState(
     DEFAULT_EDITOR_PDF_COVERAGE,
   )
@@ -2339,11 +2411,18 @@ function App() {
     [editorPdfCoverage],
   )
 
+  const editorPdfPlacementFactors = useMemo(
+    () => getEditorPdfPlacementFactors(editorPdfPlacement),
+    [editorPdfPlacement],
+  )
+
   const editorPdfPreviewLayout = useMemo(() => {
     if (!editorOutputSize) {
       return null
     }
 
+    const safeXMm = EDITOR_PDF_MIN_MARGIN_MM
+    const safeYMm = EDITOR_PDF_MIN_MARGIN_MM
     const pageWidthMm =
       resolvedEditorPdfOrientation === 'landscape' ? A4_HEIGHT_MM : A4_WIDTH_MM
     const pageHeightMm =
@@ -2351,23 +2430,33 @@ function App() {
     const safeWidthMm = Math.max(1, pageWidthMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
     const safeHeightMm = Math.max(1, pageHeightMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
     const coverageRatio = normalizedEditorPdfCoverage / 100
-    const printableWidthMm = Math.max(1, safeWidthMm * coverageRatio)
-    const printableHeightMm = Math.max(1, safeHeightMm * coverageRatio)
+    const placementWidthMm = Math.max(1, safeWidthMm * coverageRatio)
+    const placementHeightMm = Math.max(1, safeHeightMm * coverageRatio)
+    const placementXMm =
+      safeXMm + (safeWidthMm - placementWidthMm) * editorPdfPlacementFactors.xFactor
+    const placementYMm =
+      safeYMm + (safeHeightMm - placementHeightMm) * editorPdfPlacementFactors.yFactor
     const fitScale = Math.min(
-      printableWidthMm / editorOutputSize.width,
-      printableHeightMm / editorOutputSize.height,
+      placementWidthMm / editorOutputSize.width,
+      placementHeightMm / editorOutputSize.height,
     )
     const imageWidthMm = Math.max(1, editorOutputSize.width * fitScale)
     const imageHeightMm = Math.max(1, editorOutputSize.height * fitScale)
-    const imageX = (pageWidthMm - imageWidthMm) / 2
-    const imageY = (pageHeightMm - imageHeightMm) / 2
+    const imageX =
+      placementXMm + (placementWidthMm - imageWidthMm) * editorPdfPlacementFactors.xFactor
+    const imageY =
+      placementYMm + (placementHeightMm - imageHeightMm) * editorPdfPlacementFactors.yFactor
 
     return {
       pageAspectRatio: `${pageWidthMm} / ${pageHeightMm}`,
-      safeLeftPercent: (EDITOR_PDF_MIN_MARGIN_MM / pageWidthMm) * 100,
-      safeTopPercent: (EDITOR_PDF_MIN_MARGIN_MM / pageHeightMm) * 100,
+      safeLeftPercent: (safeXMm / pageWidthMm) * 100,
+      safeTopPercent: (safeYMm / pageHeightMm) * 100,
       safeWidthPercent: (safeWidthMm / pageWidthMm) * 100,
       safeHeightPercent: (safeHeightMm / pageHeightMm) * 100,
+      placementLeftPercent: (placementXMm / pageWidthMm) * 100,
+      placementTopPercent: (placementYMm / pageHeightMm) * 100,
+      placementWidthPercent: (placementWidthMm / pageWidthMm) * 100,
+      placementHeightPercent: (placementHeightMm / pageHeightMm) * 100,
       imageLeftPercent: (imageX / pageWidthMm) * 100,
       imageTopPercent: (imageY / pageHeightMm) * 100,
       imageWidthPercent: (imageWidthMm / pageWidthMm) * 100,
@@ -2376,7 +2465,12 @@ function App() {
         Math.round(((imageWidthMm * imageHeightMm) / (pageWidthMm * pageHeightMm)) * 1000) /
         10,
     }
-  }, [editorOutputSize, normalizedEditorPdfCoverage, resolvedEditorPdfOrientation])
+  }, [
+    editorOutputSize,
+    normalizedEditorPdfCoverage,
+    resolvedEditorPdfOrientation,
+    editorPdfPlacementFactors,
+  ])
 
   const downloadEditedImage = useCallback(async () => {
     const sourceCanvas = editorSourceCanvasRef.current
@@ -2455,19 +2549,29 @@ function App() {
         })
         const pageWidthMm = pdf.internal.pageSize.getWidth()
         const pageHeightMm = pdf.internal.pageSize.getHeight()
+        const safeXMm = EDITOR_PDF_MIN_MARGIN_MM
+        const safeYMm = EDITOR_PDF_MIN_MARGIN_MM
         const normalizedCoverage = normalizedEditorPdfCoverage / 100
         const safeWidthMm = Math.max(1, pageWidthMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
         const safeHeightMm = Math.max(1, pageHeightMm - EDITOR_PDF_MIN_MARGIN_MM * 2)
-        const printableWidthMm = Math.max(1, safeWidthMm * normalizedCoverage)
-        const printableHeightMm = Math.max(1, safeHeightMm * normalizedCoverage)
+        const placementWidthMm = Math.max(1, safeWidthMm * normalizedCoverage)
+        const placementHeightMm = Math.max(1, safeHeightMm * normalizedCoverage)
+        const placementXMm =
+          safeXMm + (safeWidthMm - placementWidthMm) * editorPdfPlacementFactors.xFactor
+        const placementYMm =
+          safeYMm + (safeHeightMm - placementHeightMm) * editorPdfPlacementFactors.yFactor
         const fitScale = Math.min(
-          printableWidthMm / editorOutputSize.width,
-          printableHeightMm / editorOutputSize.height,
+          placementWidthMm / editorOutputSize.width,
+          placementHeightMm / editorOutputSize.height,
         )
         const imageWidthMm = Math.max(1, editorOutputSize.width * fitScale)
         const imageHeightMm = Math.max(1, editorOutputSize.height * fitScale)
-        const imageX = (pageWidthMm - imageWidthMm) / 2
-        const imageY = (pageHeightMm - imageHeightMm) / 2
+        const imageX =
+          placementXMm +
+          (placementWidthMm - imageWidthMm) * editorPdfPlacementFactors.xFactor
+        const imageY =
+          placementYMm +
+          (placementHeightMm - imageHeightMm) * editorPdfPlacementFactors.yFactor
         const imageData = exportCanvas.toDataURL(
           'image/jpeg',
           getEditorQuality('jpeg', editorQuality),
@@ -2512,7 +2616,7 @@ function App() {
         )
         const outputSummary =
           editorOutputFormat === 'pdf'
-            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${normalizedEditorPdfCoverage}%)`
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} ${getEditorPdfPlacementLabel(editorPdfPlacement)} (${normalizedEditorPdfCoverage}%)`
             : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${outputSummary}`,
@@ -2520,7 +2624,7 @@ function App() {
       } else {
         const outputSummary =
           editorOutputFormat === 'pdf'
-            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${normalizedEditorPdfCoverage}%)`
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} ${getEditorPdfPlacementLabel(editorPdfPlacement)} (${normalizedEditorPdfCoverage}%)`
             : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
           `편집 파일 다운로드 완료: ${outputSummary}`,
@@ -2540,6 +2644,8 @@ function App() {
     editorImageMeta,
     editorOutputFormat,
     editorOutputSize,
+    editorPdfPlacement,
+    editorPdfPlacementFactors,
     resolvedEditorPdfOrientation,
     editorQuality,
     normalizedEditorPdfCoverage,
@@ -3340,6 +3446,25 @@ function App() {
                     </select>
 
                     <label className="optimize-field">
+                      배치 위치
+                      <strong>{getEditorPdfPlacementLabel(editorPdfPlacement)}</strong>
+                    </label>
+                    <div className="pdf-position-grid" role="group" aria-label="A4 배치 위치">
+                      {EDITOR_PDF_PLACEMENT_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={editorPdfPlacement === option.value ? 'active' : ''}
+                          onClick={() => setEditorPdfPlacement(option.value)}
+                          title={option.label}
+                          aria-label={option.label}
+                        >
+                          <span aria-hidden="true">{option.symbol}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <label className="optimize-field">
                       A4 채움 비율
                       <strong>{editorPdfCoverage}%</strong>
                     </label>
@@ -3484,7 +3609,7 @@ function App() {
                 <div className="pdf-layout-head">
                   <strong>A4 배치 미리보기</strong>
                   <span>
-                    {`${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} / 채움 ${normalizedEditorPdfCoverage}%`}
+                    {`${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} / ${getEditorPdfPlacementLabel(editorPdfPlacement)} / 채움 ${normalizedEditorPdfCoverage}%`}
                   </span>
                 </div>
                 <div
@@ -3498,6 +3623,15 @@ function App() {
                       top: `${editorPdfPreviewLayout.safeTopPercent}%`,
                       width: `${editorPdfPreviewLayout.safeWidthPercent}%`,
                       height: `${editorPdfPreviewLayout.safeHeightPercent}%`,
+                    }}
+                  />
+                  <div
+                    className="pdf-placement-zone"
+                    style={{
+                      left: `${editorPdfPreviewLayout.placementLeftPercent}%`,
+                      top: `${editorPdfPreviewLayout.placementTopPercent}%`,
+                      width: `${editorPdfPreviewLayout.placementWidthPercent}%`,
+                      height: `${editorPdfPreviewLayout.placementHeightPercent}%`,
                     }}
                   />
                   <div
@@ -3586,6 +3720,12 @@ function App() {
                     <strong>
                       {`A4 ${getEditorPdfOrientationLabel(resolvedEditorPdfOrientation)} (${normalizedEditorPdfCoverage}%)`}
                     </strong>
+                  </li>
+                ) : null}
+                {editorOutputFormat === 'pdf' ? (
+                  <li>
+                    <span>PDF 배치</span>
+                    <strong>{getEditorPdfPlacementLabel(editorPdfPlacement)}</strong>
                   </li>
                 ) : null}
                 <li>

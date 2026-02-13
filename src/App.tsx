@@ -185,7 +185,7 @@ function buildDownloadGuide(): DownloadGuideInfo {
       summary:
         'Safari 다운로드 목록에서 파일 오른쪽의 돋보기 아이콘을 누르면 Finder 저장 위치로 바로 이동합니다.',
       steps: [
-        'Safari 우측 상단 다운로드 버튼 또는 Option + Command + L로 다운로드 목록을 엽니다.',
+        'Safari 우측 상단 다운로드 버튼을 눌러 다운로드 목록을 엽니다.',
         '최근 파일 오른쪽 돋보기 아이콘을 눌러 Finder에서 표시합니다.',
       ],
       footnote:
@@ -215,7 +215,7 @@ function buildDownloadGuide(): DownloadGuideInfo {
       summary:
         'Edge 다운로드 목록에서 폴더 아이콘(폴더에서 표시)을 누르면 저장 위치를 바로 열 수 있습니다.',
       steps: [
-        `${isMac ? 'Command + Shift + J' : 'Ctrl + J'}로 다운로드 허브를 엽니다.`,
+        `${isMac ? 'Command + Option + L' : 'Ctrl + J'}로 다운로드 허브를 엽니다.`,
         '최근 파일 항목의 폴더 아이콘을 눌러 저장 폴더를 엽니다.',
       ],
       footnote:
@@ -639,6 +639,22 @@ function App() {
   useEffect(() => {
     redrawCanvas()
   }, [redrawCanvas])
+
+  useEffect(() => {
+    if (activePage !== 'tool' || !imageMeta) {
+      return
+    }
+
+    // The canvas element is recreated when moving between top-level pages.
+    // Redraw once after returning to the tool page so the previous image stays visible.
+    const animationId = window.requestAnimationFrame(() => {
+      redrawCanvas()
+    })
+
+    return () => {
+      window.cancelAnimationFrame(animationId)
+    }
+  }, [activePage, imageMeta, redrawCanvas])
 
   const exportOptions = useMemo<ExportOptions>(
     () => ({
@@ -1224,16 +1240,22 @@ function App() {
 
   const onPickFile: React.ChangeEventHandler<HTMLInputElement> = useCallback(
     async (event) => {
-      const file = event.target.files?.[0]
+      const files = Array.from(event.target.files ?? [])
 
-      if (!file) {
+      if (files.length === 0) {
         return
       }
 
-      await loadFile(file)
+      if (files.length > 1) {
+        await processBatchFiles(files)
+        event.target.value = ''
+        return
+      }
+
+      await loadFile(files[0])
       event.target.value = ''
     },
-    [loadFile],
+    [loadFile, processBatchFiles],
   )
 
   const onPickBatchFiles: React.ChangeEventHandler<HTMLInputElement> =
@@ -1489,12 +1511,13 @@ function App() {
               <input
                 type="file"
                 accept="image/*"
+                multiple
                 onChange={onPickFile}
                 className="file-input"
               />
               <span className="dropzone-title">사진 드래그 또는 클릭 업로드</span>
               <span className="dropzone-subtitle">
-                2장 이상 드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다.
+                2장 이상 선택/드롭 시 JPG ZIP 일괄 처리 모드로 자동 전환됩니다.
               </span>
             </label>
 

@@ -34,11 +34,12 @@ const THEME_STORAGE_KEY = 'face_masker_theme_v1'
 const DEFAULT_EDITOR_QUALITY = 0.86
 const DEFAULT_EDITOR_MAX_LONG_EDGE = 1920
 const EDITOR_MIN_CROP_SIZE = 20
+const EDITOR_PDF_MARGIN_MM = 12
 
 type ThemeMode = 'dark' | 'light'
 type PageKey = 'tool' | 'editor' | 'about' | 'privacy' | 'contact'
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
-type EditorOutputFormat = 'jpeg' | 'png' | 'webp'
+type EditorOutputFormat = 'jpeg' | 'png' | 'webp' | 'pdf'
 type BrowserFamily =
   | 'chrome'
   | 'edge'
@@ -334,6 +335,10 @@ function formatBytes(bytes: number): string {
 }
 
 function getEditorMimeType(format: EditorOutputFormat): string {
+  if (format === 'pdf') {
+    return 'application/pdf'
+  }
+
   if (format === 'png') {
     return 'image/png'
   }
@@ -346,6 +351,10 @@ function getEditorMimeType(format: EditorOutputFormat): string {
 }
 
 function getEditorExtension(format: EditorOutputFormat): string {
+  if (format === 'pdf') {
+    return 'pdf'
+  }
+
   if (format === 'png') {
     return 'png'
   }
@@ -363,6 +372,22 @@ function getEditorQuality(format: EditorOutputFormat, quality: number): number |
   }
 
   return Math.max(0.6, Math.min(0.96, quality))
+}
+
+function getEditorFormatLabel(format: EditorOutputFormat): string {
+  if (format === 'jpeg') {
+    return 'JPG'
+  }
+
+  if (format === 'png') {
+    return 'PNG'
+  }
+
+  if (format === 'webp') {
+    return 'WEBP'
+  }
+
+  return 'PDF'
 }
 
 function sanitizeCropRect(
@@ -704,7 +729,7 @@ function App() {
   )
   const [editorImageMeta, setEditorImageMeta] = useState<ImageMeta | null>(null)
   const [editorStatusMessage, setEditorStatusMessage] = useState(
-    '이미지를 업로드하면 자르기/크기 조절/포맷 변환 후 다운로드할 수 있습니다.',
+    '이미지를 업로드하면 자르기/크기 조절/포맷 변환(JPG/PNG/WEBP/PDF) 후 다운로드할 수 있습니다.',
   )
   const [editorOutputFormat, setEditorOutputFormat] =
     useState<EditorOutputFormat>('jpeg')
@@ -2326,14 +2351,60 @@ function App() {
         exportCanvas.height,
       )
 
-      const blob = await canvasToBlob(
-        exportCanvas,
-        getEditorMimeType(editorOutputFormat),
-        getEditorQuality(editorOutputFormat, editorQuality),
-      )
+      let blob: Blob
+      let extension: string
+
+      if (editorOutputFormat === 'pdf') {
+        const { jsPDF } = await import('jspdf')
+        const orientation =
+          editorOutputSize.width > editorOutputSize.height ? 'landscape' : 'portrait'
+        const pdf = new jsPDF({
+          orientation,
+          unit: 'mm',
+          format: 'a4',
+          compress: true,
+        })
+        const pageWidthMm = pdf.internal.pageSize.getWidth()
+        const pageHeightMm = pdf.internal.pageSize.getHeight()
+        const printableWidthMm = Math.max(1, pageWidthMm - EDITOR_PDF_MARGIN_MM * 2)
+        const printableHeightMm = Math.max(1, pageHeightMm - EDITOR_PDF_MARGIN_MM * 2)
+        const fitScale = Math.min(
+          printableWidthMm / editorOutputSize.width,
+          printableHeightMm / editorOutputSize.height,
+        )
+        const imageWidthMm = Math.max(1, editorOutputSize.width * fitScale)
+        const imageHeightMm = Math.max(1, editorOutputSize.height * fitScale)
+        const imageX = (pageWidthMm - imageWidthMm) / 2
+        const imageY = (pageHeightMm - imageHeightMm) / 2
+        const imageData = exportCanvas.toDataURL(
+          'image/jpeg',
+          getEditorQuality('jpeg', editorQuality),
+        )
+        pdf.addImage(
+          imageData,
+          'JPEG',
+          imageX,
+          imageY,
+          imageWidthMm,
+          imageHeightMm,
+          undefined,
+          'MEDIUM',
+        )
+        blob = new Blob([pdf.output('arraybuffer')], {
+          type: getEditorMimeType(editorOutputFormat),
+        })
+        extension = getEditorExtension(editorOutputFormat)
+      } else {
+        blob = await canvasToBlob(
+          exportCanvas,
+          getEditorMimeType(editorOutputFormat),
+          getEditorQuality(editorOutputFormat, editorQuality),
+        )
+        extension = getEditorExtension(editorOutputFormat)
+      }
+
       const downloadUrl = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
-      const extension = getEditorExtension(editorOutputFormat)
       anchor.download = `${stripExtension(editorImageMeta.name)}-edited.${extension}`
       anchor.href = downloadUrl
       anchor.click()
@@ -2347,12 +2418,20 @@ function App() {
           0,
           Math.round((1 - outputBytes / inputBytes) * 100),
         )
+        const outputSummary =
+          editorOutputFormat === 'pdf'
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 PDF`
+            : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
-          `편집 이미지 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${editorOutputSize.width}x${editorOutputSize.height}`,
+          `편집 파일 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${outputSummary}`,
         )
       } else {
+        const outputSummary =
+          editorOutputFormat === 'pdf'
+            ? `${editorOutputSize.width}x${editorOutputSize.height} 기반 A4 PDF`
+            : `${editorOutputSize.width}x${editorOutputSize.height}`
         setEditorStatusMessage(
-          `편집 이미지 다운로드 완료: ${editorOutputSize.width}x${editorOutputSize.height}`,
+          `편집 파일 다운로드 완료: ${outputSummary}`,
         )
       }
     } catch (error) {
@@ -3065,7 +3144,8 @@ function App() {
           <h1>이미지 크기·용량·자르기 간편 편집</h1>
           <p className="hero-description">
             서버 업로드 없이 한 장씩 빠르게 편집할 수 있습니다. 자르기, 해상도 축소, 형식
-            변환(JPG/PNG/WEBP)을 적용한 뒤 바로 저장하세요.
+            변환(JPG/PNG/WEBP/PDF)을 적용한 뒤 바로 저장하세요. PDF는 A4 스캔 스타일로
+            변환됩니다.
           </p>
         </section>
 
@@ -3134,13 +3214,7 @@ function App() {
               <div className="optimize-box">
                 <label className="optimize-field">
                   파일 형식
-                  <strong>
-                    {editorOutputFormat === 'jpeg'
-                      ? 'JPG'
-                      : editorOutputFormat === 'png'
-                        ? 'PNG'
-                        : 'WEBP'}
-                  </strong>
+                  <strong>{getEditorFormatLabel(editorOutputFormat)}</strong>
                 </label>
                 <select
                   value={editorOutputFormat}
@@ -3151,6 +3225,7 @@ function App() {
                   <option value="jpeg">JPG (용량 절감)</option>
                   <option value="png">PNG (무손실)</option>
                   <option value="webp">WEBP (최신 포맷)</option>
+                  <option value="pdf">PDF (A4 문서형)</option>
                 </select>
 
                 <label className="optimize-field">
@@ -3284,7 +3359,7 @@ function App() {
                 }}
                 disabled={!editorImageMeta || isEditorExporting}
               >
-                {isEditorExporting ? '편집 파일 생성 중...' : '편집 이미지 다운로드'}
+                {isEditorExporting ? '편집 파일 생성 중...' : '편집 결과 다운로드'}
               </button>
             </div>
           </div>
@@ -3320,13 +3395,7 @@ function App() {
                 </li>
                 <li>
                   <span>출력 형식</span>
-                  <strong>
-                    {editorOutputFormat === 'jpeg'
-                      ? 'JPG'
-                      : editorOutputFormat === 'png'
-                        ? 'PNG'
-                        : 'WEBP'}
-                  </strong>
+                  <strong>{getEditorFormatLabel(editorOutputFormat)}</strong>
                 </li>
                 <li>
                   <span>출력 품질</span>
@@ -3342,6 +3411,14 @@ function App() {
                     {editorMaxLongEdge <= 0 ? '원본 유지' : `${editorMaxLongEdge}px`}
                   </strong>
                 </li>
+                {editorOutputFormat === 'pdf' ? (
+                  <li>
+                    <span>PDF 페이지</span>
+                    <strong>
+                      {`A4 (${editorOutputSize.width > editorOutputSize.height ? '가로' : '세로'})`}
+                    </strong>
+                  </li>
+                ) : null}
                 <li>
                   <span>예상 출력 해상도</span>
                   <strong>

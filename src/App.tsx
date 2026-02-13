@@ -57,6 +57,8 @@ interface BatchResult {
   previewUrl?: string
   downloadName?: string
   approvedForDownload?: boolean
+  sourceFile?: File
+  editableRegions?: MaskRegion[]
 }
 
 interface ExportOptions {
@@ -353,6 +355,10 @@ function createAutoRegions(
   ]
 }
 
+function cloneRegions(regions: MaskRegion[]): MaskRegion[] {
+  return regions.map((region) => ({ ...region }))
+}
+
 async function canvasToBlob(
   canvas: HTMLCanvasElement,
   mimeType: string,
@@ -627,6 +633,7 @@ function App() {
   const [draftRect, setDraftRect] = useState<DetectionRect | null>(null)
   const [batchResults, setBatchResults] = useState<BatchResult[]>([])
   const [selectedBatchResultId, setSelectedBatchResultId] = useState<string | null>(null)
+  const [editingBatchResultId, setEditingBatchResultId] = useState<string | null>(null)
   const [isDownloadGuideOpen, setIsDownloadGuideOpen] = useState(false)
   const [statusMessage, setStatusMessage] = useState(
     ENABLE_PLATE_DETECTION
@@ -757,10 +764,21 @@ function App() {
     batchPreviewUrlsRef.current = []
   }, [])
 
+  const registerBatchPreviewUrl = useCallback((previewUrl: string) => {
+    batchPreviewUrlsRef.current.push(previewUrl)
+  }, [])
+
+  const unregisterBatchPreviewUrl = useCallback((previewUrl: string) => {
+    batchPreviewUrlsRef.current = batchPreviewUrlsRef.current.filter(
+      (url) => url !== previewUrl,
+    )
+  }, [])
+
   const clearBatchReviewState = useCallback(() => {
     revokeBatchPreviewUrls()
     setBatchResults([])
     setSelectedBatchResultId(null)
+    setEditingBatchResultId(null)
     setIsBatchDownloadPending(false)
   }, [revokeBatchPreviewUrls])
 
@@ -1228,15 +1246,16 @@ function App() {
               plateDetectionErrorMessage = plateScanErrorMessage
             }
 
+            const autoRegions = createAutoRegions(faces, plates)
             const exported = await createMaskedJpegExport(
               sourceCanvas,
-              createAutoRegions(faces, plates),
+              autoRegions,
               maskStyle,
               exportOptions,
             )
             const previewUrl = URL.createObjectURL(exported.blob)
             const downloadName = `${stripExtension(file.name)}-masked.jpg`
-            batchPreviewUrlsRef.current.push(previewUrl)
+            registerBatchPreviewUrl(previewUrl)
 
             outputBytesTotal += exported.blob.size
             successCount += 1
@@ -1256,6 +1275,8 @@ function App() {
                       previewUrl,
                       downloadName,
                       approvedForDownload: true,
+                      sourceFile: file,
+                      editableRegions: cloneRegions(autoRegions),
                     }
                   : item,
               ),
@@ -1349,6 +1370,7 @@ function App() {
       isPrepared,
       isScanning,
       maskStyle,
+      registerBatchPreviewUrl,
     ],
   )
 
@@ -1555,6 +1577,121 @@ function App() {
     [isBatchProcessing, isMobileMode, loadFile, processBatchFiles],
   )
 
+  const openBatchItemForManualEdit = useCallback(
+    async (id: string) => {
+      const target = batchResults.find(
+        (item) => item.id === id && item.status === 'done',
+      )
+
+      if (!target || !target.sourceFile) {
+        setStatusMessage('선택한 일괄 결과를 편집용 캔버스로 열 수 없습니다.')
+        return
+      }
+
+      setDrawModeEnabled(false)
+      setDraftRect(null)
+      setPreviewMode('masked')
+
+      try {
+        const { image, objectUrl } = await loadImageFromFile(target.sourceFile)
+
+        if (activeObjectUrlRef.current) {
+          URL.revokeObjectURL(activeObjectUrlRef.current)
+        }
+
+        activeObjectUrlRef.current = objectUrl
+        sourceImageRef.current = image
+        sourceCanvasRef.current = createSourceCanvas(image)
+
+        setImageMeta({
+          name: target.fileName,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+          sizeBytes: target.sourceFile.size,
+        })
+        setRegions(cloneRegions(target.editableRegions ?? []))
+        setSelectedBatchResultId(target.id)
+        setEditingBatchResultId(target.id)
+        setStatusMessage(
+          `일괄 수동 보정 모드: ${target.fileName}. 박스를 수정한 뒤 "현재 보정 저장"을 눌러 반영해 주세요.`,
+        )
+      } catch (error) {
+        const message = toErrorMessage(error, '편집용 이미지 로딩 중 오류가 발생했습니다.')
+        setStatusMessage(message)
+      }
+    },
+    [batchResults],
+  )
+
+  const saveBatchItemEdits = useCallback(async () => {
+    if (!editingBatchResultId) {
+      setStatusMessage('먼저 썸네일에서 편집할 이미지를 열어 주세요.')
+      return
+    }
+
+    const sourceCanvas = sourceCanvasRef.current
+
+    if (!sourceCanvas) {
+      setStatusMessage('편집 캔버스를 찾지 못했습니다. 이미지를 다시 열어 주세요.')
+      return
+    }
+
+    const target = batchResults.find(
+      (item) => item.id === editingBatchResultId && item.status === 'done',
+    )
+
+    if (!target) {
+      setStatusMessage('선택한 일괄 항목을 찾지 못했습니다.')
+      return
+    }
+
+    try {
+      const exported = await createMaskedJpegExport(
+        sourceCanvas,
+        regions,
+        maskStyle,
+        exportOptions,
+      )
+      const nextPreviewUrl = URL.createObjectURL(exported.blob)
+
+      if (target.previewUrl) {
+        URL.revokeObjectURL(target.previewUrl)
+        unregisterBatchPreviewUrl(target.previewUrl)
+      }
+      registerBatchPreviewUrl(nextPreviewUrl)
+
+      setBatchResults((prev) =>
+        prev.map((item) =>
+          item.id === editingBatchResultId
+            ? {
+                ...item,
+                outputBlob: exported.blob,
+                outputBytes: exported.blob.size,
+                outputWidth: exported.width,
+                outputHeight: exported.height,
+                previewUrl: nextPreviewUrl,
+                approvedForDownload: true,
+                editableRegions: cloneRegions(regions),
+              }
+            : item,
+        ),
+      )
+
+      setStatusMessage(`보정 저장 완료: ${target.fileName}`)
+    } catch (error) {
+      const message = toErrorMessage(error, '보정 저장 중 오류가 발생했습니다.')
+      setStatusMessage(message)
+    }
+  }, [
+    batchResults,
+    editingBatchResultId,
+    exportOptions,
+    maskStyle,
+    regions,
+    registerBatchPreviewUrl,
+    unregisterBatchPreviewUrl,
+  ])
+
   const toggleBatchApproval = useCallback((id: string) => {
     setBatchResults((prev) =>
       prev.map((item) =>
@@ -1758,6 +1895,18 @@ function App() {
       batchReviewItems[0]
     )
   }, [batchReviewItems, selectedBatchResultId])
+  const editingBatchResult = useMemo(() => {
+    if (!editingBatchResultId) {
+      return null
+    }
+
+    return (
+      batchReviewItems.find((item) => item.id === editingBatchResultId) ?? null
+    )
+  }, [batchReviewItems, editingBatchResultId])
+  const isSelectedBatchEditing =
+    Boolean(selectedBatchResult) &&
+    selectedBatchResult?.id === editingBatchResult?.id
 
   useEffect(() => {
     if (batchReviewItems.length === 0) {
@@ -2150,7 +2299,10 @@ function App() {
               <section className="batch-review">
                 <div className="batch-review-head">
                   <h3>일괄 결과 검토</h3>
-                  <p>썸네일을 눌러 개별 결과를 확인하고 다운로드 승인을 선택해 주세요.</p>
+                  <p>
+                    썸네일로 결과를 확인하고, 필요한 경우 편집 캔버스로 열어 수동 박스를
+                    추가한 뒤 저장해 주세요.
+                  </p>
                 </div>
 
                 {selectedBatchResult?.previewUrl && (
@@ -2173,7 +2325,8 @@ function App() {
                     ·{' '}
                     {selectedBatchResult.approvedForDownload
                       ? '다운로드 승인됨'
-                      : '다운로드 제외됨'}
+                      : '다운로드 제외됨'}{' '}
+                    · {isSelectedBatchEditing ? '편집 캔버스 연결됨' : '검토 전용'}
                   </p>
                 )}
 
@@ -2192,6 +2345,26 @@ function App() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => {
+                      if (selectedBatchResult) {
+                        void openBatchItemForManualEdit(selectedBatchResult.id)
+                      }
+                    }}
+                    disabled={!selectedBatchResult || isBatchProcessing}
+                  >
+                    선택 이미지 편집 열기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void saveBatchItemEdits()
+                    }}
+                    disabled={!isSelectedBatchEditing || isBatchProcessing}
+                  >
+                    현재 보정 저장
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setBatchApprovalForAllDone(true)}
                   >
                     전체 승인
@@ -2203,6 +2376,12 @@ function App() {
                     전체 제외
                   </button>
                 </div>
+
+                {editingBatchResult && (
+                  <p className="batch-review-edit-note">
+                    편집 중: {editingBatchResult.fileName} (수정 후 "현재 보정 저장" 필수)
+                  </p>
+                )}
 
                 <div className="batch-thumb-grid">
                   {batchReviewItems.map((item) => (

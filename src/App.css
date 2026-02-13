@@ -799,6 +799,12 @@ button:disabled {
   color: var(--ink-soft);
 }
 
+.batch-review-edit-note {
+  margin: 0;
+  font-size: 0.77rem;
+  color: color-mix(in oklab, var(--brand) 62%, var(--ink-soft));
+}
+
 .batch-review-controls {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

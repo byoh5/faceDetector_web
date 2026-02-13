@@ -466,57 +466,66 @@ async function createMaskedJpegExport(
   maskStyle: MaskStyle,
   options: ExportOptions,
 ): Promise<ExportResult> {
-  const maskedCanvas = document.createElement('canvas')
-  renderPreview(maskedCanvas, sourceCanvas, regions, maskStyle, 'masked')
-
   const targetSize = options.optimizeData
     ? calculateTargetSize(
-        maskedCanvas.width,
-        maskedCanvas.height,
+        sourceCanvas.width,
+        sourceCanvas.height,
         options.maxLongEdge,
       )
-    : { width: maskedCanvas.width, height: maskedCanvas.height }
+    : { width: sourceCanvas.width, height: sourceCanvas.height }
 
-  let exportCanvas = maskedCanvas
+  const exportSourceCanvas = document.createElement('canvas')
+  exportSourceCanvas.width = targetSize.width
+  exportSourceCanvas.height = targetSize.height
 
-  if (
-    targetSize.width !== maskedCanvas.width ||
-    targetSize.height !== maskedCanvas.height
-  ) {
-    const resizedCanvas = document.createElement('canvas')
-    resizedCanvas.width = targetSize.width
-    resizedCanvas.height = targetSize.height
+  const exportSourceContext = exportSourceCanvas.getContext('2d')
 
-    const resizedContext = resizedCanvas.getContext('2d')
-
-    if (resizedContext) {
-      resizedContext.imageSmoothingEnabled = true
-      resizedContext.imageSmoothingQuality = 'high'
-      resizedContext.drawImage(
-        maskedCanvas,
-        0,
-        0,
-        maskedCanvas.width,
-        maskedCanvas.height,
-        0,
-        0,
-        resizedCanvas.width,
-        resizedCanvas.height,
-      )
-      exportCanvas = resizedCanvas
-    }
+  if (exportSourceContext) {
+    exportSourceContext.imageSmoothingEnabled = true
+    exportSourceContext.imageSmoothingQuality = 'high'
+    exportSourceContext.drawImage(
+      sourceCanvas,
+      0,
+      0,
+      sourceCanvas.width,
+      sourceCanvas.height,
+      0,
+      0,
+      exportSourceCanvas.width,
+      exportSourceCanvas.height,
+    )
   }
 
+  const scaleX = exportSourceCanvas.width / sourceCanvas.width
+  const scaleY = exportSourceCanvas.height / sourceCanvas.height
+
+  const scaledRegions =
+    scaleX === 1 && scaleY === 1
+      ? regions
+      : regions.map((region) => ({
+          ...region,
+          x: region.x * scaleX,
+          y: region.y * scaleY,
+          width: region.width * scaleX,
+          height: region.height * scaleY,
+        }))
+
+  const maskedCanvas = document.createElement('canvas')
+  renderPreview(maskedCanvas, exportSourceCanvas, scaledRegions, maskStyle, 'masked')
+
   const blob = await canvasToBlob(
-    exportCanvas,
+    maskedCanvas,
     'image/jpeg',
     getJpegQuality(options.optimizeData, options.jpegQuality),
   )
 
+  exportSourceCanvas.width = 0
+  exportSourceCanvas.height = 0
+
   return {
     blob,
-    width: exportCanvas.width,
-    height: exportCanvas.height,
+    width: maskedCanvas.width,
+    height: maskedCanvas.height,
   }
 }
 

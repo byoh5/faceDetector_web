@@ -34,6 +34,7 @@ const THEME_STORAGE_KEY = 'face_masker_theme_v1'
 const DEFAULT_EDITOR_QUALITY = 0.86
 const EDITOR_MIN_CROP_SIZE = 20
 const DEFAULT_EDITOR_PDF_COVERAGE = 92
+const EDITOR_PDF_MIN_COVERAGE = 10
 const EDITOR_PDF_MIN_MARGIN_MM = 4
 const A4_WIDTH_MM = 210
 const A4_HEIGHT_MM = 297
@@ -2669,7 +2670,7 @@ function App() {
   }, [editorOutputSize, editorPdfOrientation])
 
   const normalizedEditorPdfCoverage = useMemo(
-    () => Math.max(60, Math.min(100, editorPdfCoverage)),
+    () => Math.max(EDITOR_PDF_MIN_COVERAGE, Math.min(100, editorPdfCoverage)),
     [editorPdfCoverage],
   )
 
@@ -3932,7 +3933,7 @@ function App() {
                     </label>
                     <input
                       type="range"
-                      min={60}
+                      min={EDITOR_PDF_MIN_COVERAGE}
                       max={100}
                       step={1}
                       value={editorPdfCoverage}

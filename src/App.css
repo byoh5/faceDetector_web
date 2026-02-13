@@ -407,6 +407,10 @@
   grid-template-columns: 1fr;
 }
 
+.toolbar.editor-toolbar {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 .toolbar button,
 .action-row button,
 .segmented button,
@@ -587,6 +591,24 @@ button:disabled {
 }
 
 .region-box.draft {
+  fill: rgba(241, 139, 54, 0.24);
+  stroke: rgba(251, 173, 111, 0.96);
+  stroke-dasharray: 4;
+}
+
+.editor-crop-mask {
+  fill: rgba(13, 22, 38, 0.5);
+  pointer-events: none;
+}
+
+.editor-crop-box {
+  fill: rgba(66, 136, 255, 0.14);
+  stroke: color-mix(in oklab, var(--brand) 72%, #8fb7ff);
+  stroke-width: 1.5px;
+  pointer-events: none;
+}
+
+.editor-crop-box.draft {
   fill: rgba(241, 139, 54, 0.24);
   stroke: rgba(251, 173, 111, 0.96);
   stroke-dasharray: 4;
@@ -928,6 +950,48 @@ button:disabled {
   padding: 0;
   display: grid;
   gap: 7px;
+}
+
+.picker-row.editor-picker-row {
+  grid-template-columns: 1fr;
+}
+
+.editor-panel {
+  align-content: start;
+}
+
+.editor-info-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.editor-info-list li {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px;
+  background: color-mix(in oklab, var(--surface) 90%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.editor-info-list span {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.editor-info-list strong {
+  color: var(--ink-strong);
+  font-size: 0.84rem;
+  text-align: right;
+  max-width: 65%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .region-list li {

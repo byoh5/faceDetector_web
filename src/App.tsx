@@ -31,10 +31,14 @@ const FACE_WARMUP_TIMEOUT_MS = 25_000
 const PLATE_WARMUP_TIMEOUT_MS = 35_000
 const PLATE_DETECTION_TIMEOUT_MS = 20_000
 const THEME_STORAGE_KEY = 'face_masker_theme_v1'
+const DEFAULT_EDITOR_QUALITY = 0.86
+const DEFAULT_EDITOR_MAX_LONG_EDGE = 1920
+const EDITOR_MIN_CROP_SIZE = 20
 
 type ThemeMode = 'dark' | 'light'
-type PageKey = 'tool' | 'about' | 'privacy' | 'contact'
+type PageKey = 'tool' | 'editor' | 'about' | 'privacy' | 'contact'
 type BatchStatus = 'pending' | 'processing' | 'done' | 'failed'
+type EditorOutputFormat = 'jpeg' | 'png' | 'webp'
 type BrowserFamily =
   | 'chrome'
   | 'edge'
@@ -87,6 +91,7 @@ function parsePageFromHash(hash: string): PageKey {
 
   if (
     normalized === 'tool' ||
+    normalized === 'editor' ||
     normalized === 'about' ||
     normalized === 'privacy' ||
     normalized === 'contact'
@@ -276,6 +281,7 @@ function buildDownloadGuide(): DownloadGuideInfo {
 
 const PAGE_ITEMS: Array<{ key: PageKey; label: string; icon: string }> = [
   { key: 'tool', label: '프라이버시 마스킹', icon: '🧩' },
+  { key: 'editor', label: '이미지 간편 편집', icon: '🛠️' },
   { key: 'about', label: '사이트 소개', icon: '📘' },
   { key: 'privacy', label: '개인정보처리방침', icon: '🛡️' },
   { key: 'contact', label: '문의하기', icon: '✉️' },
@@ -325,6 +331,57 @@ function formatBytes(bytes: number): string {
   }
 
   return `${(bytes / (1024 * 1024)).toFixed(2)}MB`
+}
+
+function getEditorMimeType(format: EditorOutputFormat): string {
+  if (format === 'png') {
+    return 'image/png'
+  }
+
+  if (format === 'webp') {
+    return 'image/webp'
+  }
+
+  return 'image/jpeg'
+}
+
+function getEditorExtension(format: EditorOutputFormat): string {
+  if (format === 'png') {
+    return 'png'
+  }
+
+  if (format === 'webp') {
+    return 'webp'
+  }
+
+  return 'jpg'
+}
+
+function getEditorQuality(format: EditorOutputFormat, quality: number): number | undefined {
+  if (format === 'png') {
+    return undefined
+  }
+
+  return Math.max(0.6, Math.min(0.96, quality))
+}
+
+function sanitizeCropRect(
+  rect: DetectionRect,
+  maxWidth: number,
+  maxHeight: number,
+): DetectionRect | null {
+  const x = Math.max(0, Math.min(rect.x, maxWidth))
+  const y = Math.max(0, Math.min(rect.y, maxHeight))
+  const right = Math.max(0, Math.min(rect.x + rect.width, maxWidth))
+  const bottom = Math.max(0, Math.min(rect.y + rect.height, maxHeight))
+  const width = right - x
+  const height = bottom - y
+
+  if (width < 2 || height < 2) {
+    return null
+  }
+
+  return { x, y, width, height }
 }
 
 function createAutoRegions(
@@ -582,6 +639,11 @@ function App() {
   const batchInputRef = useRef<HTMLInputElement | null>(null)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
   const idSequenceRef = useRef(1)
+  const editorCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const editorSourceCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const editorObjectUrlRef = useRef<string | null>(null)
+  const editorInputRef = useRef<HTMLInputElement | null>(null)
+  const editorCropStartRef = useRef<{ x: number; y: number } | null>(null)
 
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window === 'undefined') {
@@ -640,6 +702,21 @@ function App() {
       ? '사진을 올리면 얼굴+번호판 자동 가림이 시작됩니다.'
       : '사진을 올리면 얼굴 자동 가림이 시작됩니다.',
   )
+  const [editorImageMeta, setEditorImageMeta] = useState<ImageMeta | null>(null)
+  const [editorStatusMessage, setEditorStatusMessage] = useState(
+    '이미지를 업로드하면 자르기/크기 조절/포맷 변환 후 다운로드할 수 있습니다.',
+  )
+  const [editorOutputFormat, setEditorOutputFormat] =
+    useState<EditorOutputFormat>('jpeg')
+  const [editorQuality, setEditorQuality] = useState(DEFAULT_EDITOR_QUALITY)
+  const [editorMaxLongEdge, setEditorMaxLongEdge] = useState(
+    DEFAULT_EDITOR_MAX_LONG_EDGE,
+  )
+  const [editorCropRect, setEditorCropRect] = useState<DetectionRect | null>(null)
+  const [editorCropDraft, setEditorCropDraft] = useState<DetectionRect | null>(null)
+  const [isEditorCropMode, setIsEditorCropMode] = useState(false)
+  const [isEditorDragging, setIsEditorDragging] = useState(false)
+  const [isEditorExporting, setIsEditorExporting] = useState(false)
 
   const canUseShareSheet =
     typeof navigator !== 'undefined' && typeof navigator.share === 'function'
@@ -788,6 +865,10 @@ function App() {
         URL.revokeObjectURL(activeObjectUrlRef.current)
       }
 
+      if (editorObjectUrlRef.current) {
+        URL.revokeObjectURL(editorObjectUrlRef.current)
+      }
+
       revokeBatchPreviewUrls()
     }
   }, [revokeBatchPreviewUrls])
@@ -841,6 +922,45 @@ function App() {
       window.cancelAnimationFrame(animationId)
     }
   }, [activePage, imageMeta, redrawCanvas])
+
+  const redrawEditorCanvas = useCallback(() => {
+    const canvas = editorCanvasRef.current
+    const sourceCanvas = editorSourceCanvasRef.current
+
+    if (!canvas || !sourceCanvas) {
+      return
+    }
+
+    canvas.width = sourceCanvas.width
+    canvas.height = sourceCanvas.height
+
+    const context = canvas.getContext('2d')
+
+    if (!context) {
+      return
+    }
+
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    context.drawImage(sourceCanvas, 0, 0)
+  }, [])
+
+  useEffect(() => {
+    redrawEditorCanvas()
+  }, [editorImageMeta, redrawEditorCanvas])
+
+  useEffect(() => {
+    if (activePage !== 'editor' || !editorImageMeta) {
+      return
+    }
+
+    const animationId = window.requestAnimationFrame(() => {
+      redrawEditorCanvas()
+    })
+
+    return () => {
+      window.cancelAnimationFrame(animationId)
+    }
+  }, [activePage, editorImageMeta, redrawEditorCanvas])
 
   const exportOptions = useMemo<ExportOptions>(
     () => ({
@@ -1577,6 +1697,237 @@ function App() {
     [isBatchProcessing, isMobileMode, loadFile, processBatchFiles],
   )
 
+  const loadEditorFile = useCallback(async (file: File) => {
+    if (!isImageFile(file)) {
+      setEditorStatusMessage('이미지 파일만 편집할 수 있습니다.')
+      return
+    }
+
+    setEditorCropDraft(null)
+    setIsEditorCropMode(false)
+
+    try {
+      const { image, objectUrl } = await loadImageFromFile(file)
+
+      if (editorObjectUrlRef.current) {
+        URL.revokeObjectURL(editorObjectUrlRef.current)
+      }
+      if (editorSourceCanvasRef.current) {
+        editorSourceCanvasRef.current.width = 0
+        editorSourceCanvasRef.current.height = 0
+      }
+
+      editorObjectUrlRef.current = objectUrl
+      editorSourceCanvasRef.current = createSourceCanvas(image)
+
+      setEditorImageMeta({
+        name: file.name,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        sizeBytes: file.size,
+      })
+      setEditorCropRect({
+        x: 0,
+        y: 0,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      })
+      setEditorStatusMessage(
+        '이미지를 불러왔습니다. 자르기/크기/포맷을 설정한 뒤 다운로드하세요.',
+      )
+    } catch (error) {
+      const message = toErrorMessage(error, '이미지 로딩 중 오류가 발생했습니다.')
+      setEditorStatusMessage(message)
+    }
+  }, [])
+
+  const onPickEditorFile: React.ChangeEventHandler<HTMLInputElement> = useCallback(
+    async (event) => {
+      const files = Array.from(event.target.files ?? [])
+
+      if (files.length === 0) {
+        return
+      }
+
+      await loadEditorFile(files[0])
+
+      if (files.length > 1) {
+        setEditorStatusMessage(
+          '이미지 간편 편집은 한 번에 한 장씩 처리합니다. 첫 번째 이미지를 불러왔습니다.',
+        )
+      }
+
+      event.target.value = ''
+    },
+    [loadEditorFile],
+  )
+
+  const onEditorDrop: React.DragEventHandler<HTMLLabelElement> = useCallback(
+    async (event) => {
+      event.preventDefault()
+      setIsEditorDragging(false)
+
+      const droppedFiles = Array.from(event.dataTransfer.files ?? [])
+
+      if (droppedFiles.length === 0) {
+        return
+      }
+
+      await loadEditorFile(droppedFiles[0])
+
+      if (droppedFiles.length > 1) {
+        setEditorStatusMessage(
+          '이미지 간편 편집은 한 번에 한 장씩 처리합니다. 첫 번째 이미지를 불러왔습니다.',
+        )
+      }
+    },
+    [loadEditorFile],
+  )
+
+  const getPointOnEditorImage = useCallback(
+    (event: React.PointerEvent<SVGSVGElement>) => {
+      if (!editorImageMeta) {
+        return null
+      }
+
+      const rect = event.currentTarget.getBoundingClientRect()
+
+      if (rect.width === 0 || rect.height === 0) {
+        return null
+      }
+
+      const x = ((event.clientX - rect.left) / rect.width) * editorImageMeta.width
+      const y = ((event.clientY - rect.top) / rect.height) * editorImageMeta.height
+
+      return {
+        x: Math.max(0, Math.min(x, editorImageMeta.width)),
+        y: Math.max(0, Math.min(y, editorImageMeta.height)),
+      }
+    },
+    [editorImageMeta],
+  )
+
+  const onEditorOverlayPointerDown = useCallback(
+    (event: React.PointerEvent<SVGSVGElement>) => {
+      if (!isEditorCropMode || !editorImageMeta) {
+        return
+      }
+
+      const point = getPointOnEditorImage(event)
+
+      if (!point) {
+        return
+      }
+
+      event.preventDefault()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      editorCropStartRef.current = point
+      setEditorCropDraft({ x: point.x, y: point.y, width: 0, height: 0 })
+    },
+    [editorImageMeta, getPointOnEditorImage, isEditorCropMode],
+  )
+
+  const onEditorOverlayPointerMove = useCallback(
+    (event: React.PointerEvent<SVGSVGElement>) => {
+      if (!isEditorCropMode) {
+        return
+      }
+
+      const start = editorCropStartRef.current
+
+      if (!start) {
+        return
+      }
+
+      const point = getPointOnEditorImage(event)
+
+      if (!point) {
+        return
+      }
+
+      setEditorCropDraft({
+        x: Math.min(start.x, point.x),
+        y: Math.min(start.y, point.y),
+        width: Math.abs(start.x - point.x),
+        height: Math.abs(start.y - point.y),
+      })
+    },
+    [getPointOnEditorImage, isEditorCropMode],
+  )
+
+  const onEditorOverlayPointerUp = useCallback(
+    (event: React.PointerEvent<SVGSVGElement>) => {
+      if (!isEditorCropMode || !editorImageMeta) {
+        return
+      }
+
+      const start = editorCropStartRef.current
+
+      if (!start) {
+        return
+      }
+
+      const point = getPointOnEditorImage(event)
+      editorCropStartRef.current = null
+      event.currentTarget.releasePointerCapture(event.pointerId)
+
+      if (!point) {
+        setEditorCropDraft(null)
+        return
+      }
+
+      const nextRect = {
+        x: Math.min(start.x, point.x),
+        y: Math.min(start.y, point.y),
+        width: Math.abs(start.x - point.x),
+        height: Math.abs(start.y - point.y),
+      }
+      setEditorCropDraft(null)
+
+      if (
+        nextRect.width < EDITOR_MIN_CROP_SIZE ||
+        nextRect.height < EDITOR_MIN_CROP_SIZE
+      ) {
+        setEditorStatusMessage(
+          `자르기 영역은 최소 ${EDITOR_MIN_CROP_SIZE}px 이상으로 지정해 주세요.`,
+        )
+        return
+      }
+
+      const sanitized = sanitizeCropRect(
+        nextRect,
+        editorImageMeta.width,
+        editorImageMeta.height,
+      )
+
+      if (!sanitized) {
+        setEditorStatusMessage('자르기 영역을 다시 지정해 주세요.')
+        return
+      }
+
+      setEditorCropRect(sanitized)
+      setEditorStatusMessage(
+        `자르기 영역을 적용했습니다. (${Math.round(sanitized.width)}x${Math.round(sanitized.height)})`,
+      )
+    },
+    [editorImageMeta, getPointOnEditorImage, isEditorCropMode],
+  )
+
+  const resetEditorCrop = useCallback(() => {
+    if (!editorImageMeta) {
+      return
+    }
+
+    setEditorCropDraft(null)
+    setEditorCropRect({
+      x: 0,
+      y: 0,
+      width: editorImageMeta.width,
+      height: editorImageMeta.height,
+    })
+    setEditorStatusMessage('자르기 영역을 전체 이미지로 초기화했습니다.')
+  }, [editorImageMeta])
+
   const openBatchItemForManualEdit = useCallback(
     async (id: string) => {
       const target = batchResults.find(
@@ -1859,6 +2210,169 @@ function App() {
     }
   }, [canUseShareSheet, exportOptions, imageMeta, maskStyle, regions])
 
+  const normalizedEditorCrop = useMemo(() => {
+    if (!editorImageMeta) {
+      return null
+    }
+
+    const fallback = {
+      x: 0,
+      y: 0,
+      width: editorImageMeta.width,
+      height: editorImageMeta.height,
+    }
+
+    if (!editorCropRect) {
+      return fallback
+    }
+
+    return (
+      sanitizeCropRect(editorCropRect, editorImageMeta.width, editorImageMeta.height) ??
+      fallback
+    )
+  }, [editorCropRect, editorImageMeta])
+
+  const editorDisplayCrop = useMemo(() => {
+    if (!editorImageMeta) {
+      return null
+    }
+
+    if (editorCropDraft) {
+      return (
+        sanitizeCropRect(editorCropDraft, editorImageMeta.width, editorImageMeta.height) ??
+        normalizedEditorCrop
+      )
+    }
+
+    return normalizedEditorCrop
+  }, [editorCropDraft, editorImageMeta, normalizedEditorCrop])
+
+  const editorOutputSize = useMemo(() => {
+    if (!normalizedEditorCrop) {
+      return null
+    }
+
+    const cropWidth = Math.max(1, Math.round(normalizedEditorCrop.width))
+    const cropHeight = Math.max(1, Math.round(normalizedEditorCrop.height))
+
+    if (editorMaxLongEdge <= 0) {
+      return { width: cropWidth, height: cropHeight }
+    }
+
+    return calculateTargetSize(cropWidth, cropHeight, editorMaxLongEdge)
+  }, [editorMaxLongEdge, normalizedEditorCrop])
+
+  const downloadEditedImage = useCallback(async () => {
+    const sourceCanvas = editorSourceCanvasRef.current
+
+    if (
+      !sourceCanvas ||
+      !editorImageMeta ||
+      !normalizedEditorCrop ||
+      !editorOutputSize
+    ) {
+      return
+    }
+
+    setIsEditorExporting(true)
+
+    const cropCanvas = document.createElement('canvas')
+    const exportCanvas = document.createElement('canvas')
+
+    try {
+      cropCanvas.width = Math.max(1, Math.round(normalizedEditorCrop.width))
+      cropCanvas.height = Math.max(1, Math.round(normalizedEditorCrop.height))
+
+      const cropContext = cropCanvas.getContext('2d')
+
+      if (!cropContext) {
+        throw new Error('자르기 캔버스를 초기화하지 못했습니다.')
+      }
+
+      cropContext.imageSmoothingEnabled = true
+      cropContext.imageSmoothingQuality = 'high'
+      cropContext.drawImage(
+        sourceCanvas,
+        normalizedEditorCrop.x,
+        normalizedEditorCrop.y,
+        normalizedEditorCrop.width,
+        normalizedEditorCrop.height,
+        0,
+        0,
+        cropCanvas.width,
+        cropCanvas.height,
+      )
+
+      exportCanvas.width = editorOutputSize.width
+      exportCanvas.height = editorOutputSize.height
+
+      const exportContext = exportCanvas.getContext('2d')
+
+      if (!exportContext) {
+        throw new Error('출력 캔버스를 초기화하지 못했습니다.')
+      }
+
+      exportContext.imageSmoothingEnabled = true
+      exportContext.imageSmoothingQuality = 'high'
+      exportContext.drawImage(
+        cropCanvas,
+        0,
+        0,
+        cropCanvas.width,
+        cropCanvas.height,
+        0,
+        0,
+        exportCanvas.width,
+        exportCanvas.height,
+      )
+
+      const blob = await canvasToBlob(
+        exportCanvas,
+        getEditorMimeType(editorOutputFormat),
+        getEditorQuality(editorOutputFormat, editorQuality),
+      )
+      const downloadUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      const extension = getEditorExtension(editorOutputFormat)
+      anchor.download = `${stripExtension(editorImageMeta.name)}-edited.${extension}`
+      anchor.href = downloadUrl
+      anchor.click()
+      URL.revokeObjectURL(downloadUrl)
+
+      const inputBytes = editorImageMeta.sizeBytes ?? 0
+      const outputBytes = blob.size
+
+      if (inputBytes > 0) {
+        const reductionPercent = Math.max(
+          0,
+          Math.round((1 - outputBytes / inputBytes) * 100),
+        )
+        setEditorStatusMessage(
+          `편집 이미지 다운로드 완료: ${formatBytes(inputBytes)} → ${formatBytes(outputBytes)} (${reductionPercent}% 절감), ${editorOutputSize.width}x${editorOutputSize.height}`,
+        )
+      } else {
+        setEditorStatusMessage(
+          `편집 이미지 다운로드 완료: ${editorOutputSize.width}x${editorOutputSize.height}`,
+        )
+      }
+    } catch (error) {
+      const message = toErrorMessage(error, '편집 이미지 생성 중 오류가 발생했습니다.')
+      setEditorStatusMessage(message)
+    } finally {
+      cropCanvas.width = 0
+      cropCanvas.height = 0
+      exportCanvas.width = 0
+      exportCanvas.height = 0
+      setIsEditorExporting(false)
+    }
+  }, [
+    editorImageMeta,
+    editorOutputFormat,
+    editorOutputSize,
+    editorQuality,
+    normalizedEditorCrop,
+  ])
+
   const activeCount = useMemo(
     () => regions.filter((region) => region.active).length,
     [regions],
@@ -1936,6 +2450,10 @@ function App() {
   const currentPageTitle = useMemo(() => {
     if (activePage === 'tool') {
       return '프라이버시 마스킹'
+    }
+
+    if (activePage === 'editor') {
+      return '이미지 간편 편집'
     }
 
     if (activePage === 'about') {
@@ -2539,6 +3057,309 @@ function App() {
     )
   }
 
+  const renderEditorPage = () => {
+    return (
+      <div className="app-shell">
+        <section className="hero">
+          <p className="eyebrow">브라우저 로컬 편집</p>
+          <h1>이미지 크기·용량·자르기 간편 편집</h1>
+          <p className="hero-description">
+            서버 업로드 없이 한 장씩 빠르게 편집할 수 있습니다. 자르기, 해상도 축소, 형식
+            변환(JPG/PNG/WEBP)을 적용한 뒤 바로 저장하세요.
+          </p>
+        </section>
+
+        <section className="controls">
+          <div className="dropzone-wrapper">
+            <label
+              className={`dropzone ${isEditorDragging ? 'dragging' : ''}`}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setIsEditorDragging(true)
+              }}
+              onDragLeave={() => setIsEditorDragging(false)}
+              onDrop={onEditorDrop}
+            >
+              <input
+                type="file"
+                accept="image/*"
+                onChange={onPickEditorFile}
+                className="file-input"
+              />
+              <span className="dropzone-title">이미지 드래그 또는 클릭 업로드</span>
+              <span className="dropzone-subtitle">
+                간편 편집 페이지는 한 번에 한 장씩 처리합니다.
+              </span>
+            </label>
+
+            <input
+              ref={editorInputRef}
+              type="file"
+              accept="image/*"
+              onChange={onPickEditorFile}
+              className="file-input"
+            />
+
+            <div className="toolbar editor-toolbar">
+              <button
+                type="button"
+                onClick={() => editorInputRef.current?.click()}
+              >
+                이미지 다시 선택
+              </button>
+              <button
+                type="button"
+                className={isEditorCropMode ? 'active' : ''}
+                disabled={!editorImageMeta}
+                onClick={() => {
+                  setIsEditorCropMode((prev) => !prev)
+                  setEditorCropDraft(null)
+                }}
+              >
+                {isEditorCropMode ? '자르기 선택 종료' : '자르기 영역 지정'}
+              </button>
+              <button
+                type="button"
+                disabled={!editorImageMeta}
+                onClick={resetEditorCrop}
+              >
+                자르기 초기화
+              </button>
+            </div>
+          </div>
+
+          <div className="picker-row editor-picker-row">
+            <div className="picker-group">
+              <span className="picker-label">출력 옵션</span>
+              <div className="optimize-box">
+                <label className="optimize-field">
+                  파일 형식
+                  <strong>
+                    {editorOutputFormat === 'jpeg'
+                      ? 'JPG'
+                      : editorOutputFormat === 'png'
+                        ? 'PNG'
+                        : 'WEBP'}
+                  </strong>
+                </label>
+                <select
+                  value={editorOutputFormat}
+                  onChange={(event) =>
+                    setEditorOutputFormat(event.target.value as EditorOutputFormat)
+                  }
+                >
+                  <option value="jpeg">JPG (용량 절감)</option>
+                  <option value="png">PNG (무손실)</option>
+                  <option value="webp">WEBP (최신 포맷)</option>
+                </select>
+
+                <label className="optimize-field">
+                  품질
+                  <strong>
+                    {editorOutputFormat === 'png'
+                      ? '무손실'
+                      : `${Math.round(editorQuality * 100)}%`}
+                  </strong>
+                </label>
+                <input
+                  type="range"
+                  min={60}
+                  max={96}
+                  step={1}
+                  value={Math.round(editorQuality * 100)}
+                  onChange={(event) =>
+                    setEditorQuality(Number(event.target.value) / 100)
+                  }
+                  disabled={editorOutputFormat === 'png'}
+                />
+
+                <label className="optimize-field">
+                  최대 긴 변
+                  <strong>
+                    {editorMaxLongEdge <= 0 ? '원본 유지' : `${editorMaxLongEdge}px`}
+                  </strong>
+                </label>
+                <select
+                  value={editorMaxLongEdge}
+                  onChange={(event) => setEditorMaxLongEdge(Number(event.target.value))}
+                >
+                  <option value={0}>원본 유지</option>
+                  <option value={1280}>1280px (초절약)</option>
+                  <option value={1600}>1600px</option>
+                  <option value={1920}>1920px (권장)</option>
+                  <option value={2560}>2560px</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="workspace">
+          <div className="canvas-panel">
+            <div
+              className="canvas-stage"
+              style={
+                editorImageMeta
+                  ? { aspectRatio: `${editorImageMeta.width} / ${editorImageMeta.height}` }
+                  : undefined
+              }
+            >
+              {editorImageMeta ? (
+                <>
+                  <canvas ref={editorCanvasRef} className="preview-canvas" />
+                  <svg
+                    className={`overlay ${isEditorCropMode ? 'draw-mode' : ''}`}
+                    viewBox={`0 0 ${editorImageMeta.width} ${editorImageMeta.height}`}
+                    preserveAspectRatio="none"
+                    onPointerDown={onEditorOverlayPointerDown}
+                    onPointerMove={onEditorOverlayPointerMove}
+                    onPointerUp={onEditorOverlayPointerUp}
+                    onPointerCancel={() => {
+                      editorCropStartRef.current = null
+                      setEditorCropDraft(null)
+                    }}
+                  >
+                    {editorDisplayCrop && (
+                      <>
+                        <rect
+                          x={0}
+                          y={0}
+                          width={editorImageMeta.width}
+                          height={editorDisplayCrop.y}
+                          className="editor-crop-mask"
+                        />
+                        <rect
+                          x={0}
+                          y={editorDisplayCrop.y}
+                          width={editorDisplayCrop.x}
+                          height={editorDisplayCrop.height}
+                          className="editor-crop-mask"
+                        />
+                        <rect
+                          x={editorDisplayCrop.x + editorDisplayCrop.width}
+                          y={editorDisplayCrop.y}
+                          width={Math.max(
+                            0,
+                            editorImageMeta.width -
+                              (editorDisplayCrop.x + editorDisplayCrop.width),
+                          )}
+                          height={editorDisplayCrop.height}
+                          className="editor-crop-mask"
+                        />
+                        <rect
+                          x={0}
+                          y={editorDisplayCrop.y + editorDisplayCrop.height}
+                          width={editorImageMeta.width}
+                          height={Math.max(
+                            0,
+                            editorImageMeta.height -
+                              (editorDisplayCrop.y + editorDisplayCrop.height),
+                          )}
+                          className="editor-crop-mask"
+                        />
+                        <rect
+                          x={editorDisplayCrop.x}
+                          y={editorDisplayCrop.y}
+                          width={editorDisplayCrop.width}
+                          height={editorDisplayCrop.height}
+                          className={`editor-crop-box ${editorCropDraft ? 'draft' : ''}`}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </>
+                    )}
+                  </svg>
+                </>
+              ) : (
+                <div className="empty-state">
+                  이미지를 올리면 편집 미리보기가 여기에 표시됩니다.
+                </div>
+              )}
+            </div>
+
+            <div className="action-row">
+              <button
+                type="button"
+                onClick={() => {
+                  void downloadEditedImage()
+                }}
+                disabled={!editorImageMeta || isEditorExporting}
+              >
+                {isEditorExporting ? '편집 파일 생성 중...' : '편집 이미지 다운로드'}
+              </button>
+            </div>
+          </div>
+
+          <aside className="region-panel editor-panel">
+            <div className="panel-header">
+              <h2>편집 정보</h2>
+              <p>
+                {editorImageMeta
+                  ? `원본 ${editorImageMeta.width}x${editorImageMeta.height}`
+                  : '이미지를 먼저 업로드해 주세요'}
+              </p>
+            </div>
+
+            <div className="status-box">{editorStatusMessage}</div>
+
+            {editorImageMeta && normalizedEditorCrop && editorOutputSize ? (
+              <ul className="editor-info-list">
+                <li>
+                  <span>원본 파일</span>
+                  <strong>{editorImageMeta.name}</strong>
+                </li>
+                <li>
+                  <span>원본 용량</span>
+                  <strong>{formatBytes(editorImageMeta.sizeBytes ?? 0)}</strong>
+                </li>
+                <li>
+                  <span>자르기 영역</span>
+                  <strong>
+                    {Math.round(normalizedEditorCrop.width)}x
+                    {Math.round(normalizedEditorCrop.height)}
+                  </strong>
+                </li>
+                <li>
+                  <span>출력 형식</span>
+                  <strong>
+                    {editorOutputFormat === 'jpeg'
+                      ? 'JPG'
+                      : editorOutputFormat === 'png'
+                        ? 'PNG'
+                        : 'WEBP'}
+                  </strong>
+                </li>
+                <li>
+                  <span>출력 품질</span>
+                  <strong>
+                    {editorOutputFormat === 'png'
+                      ? '무손실'
+                      : `${Math.round(editorQuality * 100)}%`}
+                  </strong>
+                </li>
+                <li>
+                  <span>최대 긴 변</span>
+                  <strong>
+                    {editorMaxLongEdge <= 0 ? '원본 유지' : `${editorMaxLongEdge}px`}
+                  </strong>
+                </li>
+                <li>
+                  <span>예상 출력 해상도</span>
+                  <strong>
+                    {editorOutputSize.width}x{editorOutputSize.height}
+                  </strong>
+                </li>
+              </ul>
+            ) : (
+              <p className="panel-empty">
+                자르기 영역을 지정하고 출력 옵션을 조정해 주세요.
+              </p>
+            )}
+          </aside>
+        </section>
+      </div>
+    )
+  }
+
   const renderInformationPage = () => {
     if (activePage === 'about') {
       return (
@@ -2630,7 +3451,11 @@ function App() {
         </header>
 
         <div className="dashboard-content">
-          {activePage === 'tool' ? renderToolPage() : renderInformationPage()}
+          {activePage === 'tool'
+            ? renderToolPage()
+            : activePage === 'editor'
+              ? renderEditorPage()
+              : renderInformationPage()}
         </div>
       </section>
     </main>

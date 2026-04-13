@@ -40,6 +40,10 @@ const A4_WIDTH_MM = 210
 const A4_HEIGHT_MM = 297
 const EDITOR_CUSTOM_MIN_DIMENSION = 64
 const EDITOR_CUSTOM_MAX_DIMENSION = 8000
+const KAKAO_ADFIT_SCRIPT_SRC = 'https://t1.daumcdn.net/kas/static/ba.min.js'
+const KAKAO_ADFIT_AD_UNIT = 'DAN-Blil5UyPxKSACsgC'
+const KAKAO_ADFIT_WIDTH = '320'
+const KAKAO_ADFIT_HEIGHT = '100'
 
 type ThemeMode = 'dark' | 'light'
 type PageKey = 'tool' | 'editor' | 'about' | 'privacy' | 'contact'
@@ -807,6 +811,68 @@ function createSourceCanvas(image: HTMLImageElement): HTMLCanvasElement {
   }
 
   return sourceCanvas
+}
+
+function KakaoAdBanner({ slotKey }: { slotKey: string }) {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [isNoAd, setIsNoAd] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return
+    }
+
+    const host = hostRef.current
+
+    if (!host) {
+      return
+    }
+
+    let isDisposed = false
+
+    const globalWindow = window as unknown as Record<string, unknown>
+    const callbackName = `__kakaoAdFitNoAd_${slotKey.replace(/[^a-z0-9_]/gi, '_')}`
+
+    globalWindow[callbackName] = () => {
+      if (!isDisposed) {
+        setIsNoAd(true)
+      }
+    }
+
+    host.replaceChildren()
+
+    const ins = document.createElement('ins')
+    ins.className = 'kakao_ad_area'
+    ins.style.display = 'none'
+    ins.setAttribute('data-ad-unit', KAKAO_ADFIT_AD_UNIT)
+    ins.setAttribute('data-ad-width', KAKAO_ADFIT_WIDTH)
+    ins.setAttribute('data-ad-height', KAKAO_ADFIT_HEIGHT)
+    ins.setAttribute('data-ad-onfail', callbackName)
+    host.appendChild(ins)
+
+    const script = document.createElement('script')
+    script.async = true
+    script.type = 'text/javascript'
+    script.charset = 'utf-8'
+    script.src = KAKAO_ADFIT_SCRIPT_SRC
+    host.appendChild(script)
+
+    return () => {
+      isDisposed = true
+      delete globalWindow[callbackName]
+      host.replaceChildren()
+    }
+  }, [slotKey])
+
+  if (isNoAd) {
+    return null
+  }
+
+  return (
+    <div className="page-ad-slot" aria-label="광고">
+      <div ref={hostRef} className="page-ad-slot-inner" />
+    </div>
+  )
 }
 
 function App() {
@@ -3022,9 +3088,11 @@ function App() {
             <p className="hero-description">
               {ENABLE_PLATE_DETECTION
                 ? '기능 시작 시 얼굴/번호판 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'
-                : '기능 시작 시 얼굴 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'}
+              : '기능 시작 시 얼굴 검출 엔진을 내려받습니다. 한 번 준비하면 같은 브라우저에서는 다시 다운로드 없이 바로 변환할 수 있습니다.'}
             </p>
           </section>
+
+          <KakaoAdBanner slotKey="tool-intro" />
 
           <section className="consent-card">
             <p className="consent-title">기능 사용 전 확인</p>
@@ -3097,6 +3165,8 @@ function App() {
               : '얼굴을 자동으로 찾고 기본값으로 모자이크 처리합니다. 틀린 박스만 빠르게 on/off 하거나 드래그로 추가하면 끝납니다.'}
           </p>
         </section>
+
+        <KakaoAdBanner slotKey="tool-workspace" />
 
         <section className="cache-assurance">
           {!ENABLE_PLATE_DETECTION
@@ -3614,6 +3684,8 @@ function App() {
             적용한 뒤 바로 저장하세요. PDF는 A4 스캔 스타일로 변환됩니다.
           </p>
         </section>
+
+        <KakaoAdBanner slotKey="editor" />
 
         <section className="controls">
           <div className="dropzone-wrapper">
@@ -4269,6 +4341,7 @@ function App() {
         <section className="page-card">
           <p className="page-kicker">About</p>
           <h2>모두가 쉽게 쓰는 무료 오픈 툴을 만들고 있습니다.</h2>
+          <KakaoAdBanner slotKey="about" />
           <p>
             이 사이트는 어려운 설치 과정 없이 누구나 사진을 간편하게 가릴 수 있도록 만든
             무료 오픈 웹 툴입니다. 복잡한 지식이 없어도 업로드 후 바로 익명화 작업을 시작할
@@ -4287,6 +4360,7 @@ function App() {
         <section className="page-card">
           <p className="page-kicker">Privacy Policy</p>
           <h2>개인정보처리방침</h2>
+          <KakaoAdBanner slotKey="privacy" />
           <p>
             본 서비스는 사용자의 사진과 개인정보를 서버에 저장하거나 관리하지 않는 것을
             기본 원칙으로 합니다.
@@ -4309,6 +4383,7 @@ function App() {
       <section className="page-card">
         <p className="page-kicker">Contact</p>
         <h2>문의하기</h2>
+        <KakaoAdBanner slotKey="contact" />
         <p>기능 제안, 버그 제보, 협업 문의는 아래 이메일로 보내주세요.</p>
         <a className="contact-link" href="mailto:andreabyfive@gmail.com">
           andreabyfive@gmail.com

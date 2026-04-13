@@ -179,6 +179,18 @@
   line-height: 1.72;
 }
 
+.page-ad-slot {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.page-ad-slot-inner {
+  width: 320px;
+  max-width: 100%;
+  min-height: 100px;
+}
+
 .page-list {
   margin: 0;
   padding-left: 18px;
